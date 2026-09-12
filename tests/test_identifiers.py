@@ -42,12 +42,12 @@ def test_short_or_clean_tokens_emit_no_alias():
 def test_flat_query_finds_separator_material():
     """端到端：材料里写 max_len，用 maxlen 去检索也要命中原块。"""
     chunks = [
-        ('项目1_训练脚本.md', '训练脚本里 max_len 设成 512，超过就截断，这一条是经验值。' * 4),
-        ('项目2_检索模块.md', '检索模块用 BM25，召回路和精排路分开跑，召回数固定。' * 4),
-        ('项目3_微调报告.md', '微调用 LoRA，显存不够就把 batch 降下来，梯度累积补上。' * 4),
+        ('项目甲_训练脚本.md', '训练脚本里 max_len 设成 512，超过就截断，这一条是经验值。' * 4),
+        ('项目乙_检索模块.md', '检索模块用 BM25，召回路和精排路分开跑，召回数固定。' * 4),
+        ('项目丙_微调报告.md', '微调用 LoRA，显存不够就把 batch 降下来，梯度累积补上。' * 4),
     ]
     idx = knowledge.BM25(chunks)
     for q in ('maxlen', 'max_len'):
         hits = idx.search(q, topk=1)
         assert hits, '查询 %r 一个都没命中' % q
-        assert hits[0][1] == '项目1_训练脚本.md', '查询 %r 命中了 %s' % (q, hits[0][1])
+        assert hits[0][1] == '项目甲_训练脚本.md', '查询 %r 命中了 %s' % (q, hits[0][1])

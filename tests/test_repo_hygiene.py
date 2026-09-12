@@ -30,6 +30,14 @@ FORBIDDEN = [
     (r'F:[\\/][^\r\n]{0,24}python_tool', '本机 Python 安装路径'),
     ('deepseek' + '密钥', '个人密钥文件名'),
     (r'sk-[A-Za-z0-9]{20,}', '疑似真实 API Key'),
+    # 拼成两段再拼起来：这条测试文件本身也在扫描范围内，
+    # 直接写全名会让它自己命中自己。
+    ('李雨' + '泽', '真实人名（材料/录音里出现）'),
+    ('星璇' + '智控', '真实公司名（材料里出现）'),
+    ('金橙' + '智能', '真实雇主名（面试问答里出现）'),
+    ('无人机' + '地面站', '真实项目名'),
+    ('多智能' + '体系统', '真实项目名'),
+    ('LoRA_' + 'QLoRA', '真实项目名（文件命名）'),
 ]
 
 
@@ -44,13 +52,16 @@ def _git_ignored(paths):
     if not rel:
         return set()
     try:
-        r = subprocess.run(['git', 'check-ignore', '-z', '--stdin'], cwd=ROOT,
-                           input='\0'.join(rel) + '\0',
-                           capture_output=True, text=True, timeout=60)
+        # 必须走 bytes、显式 UTF-8：用 text=True 时中文路径会按本机 ANSI 编码出去，
+        # git 按 UTF-8 收，两边对不上 —— 结果就是「中文名的被忽略文件」照样被扫，
+        # 而 ASCII 名字的能过滤掉。这种一半对一半错最难发现。
+        r = subprocess.run(['git', '-c', 'core.quotepath=false', 'check-ignore', '-z', '--stdin'],
+                           cwd=ROOT, input=('\0'.join(rel) + '\0').encode('utf-8'),
+                           capture_output=True, timeout=60)
     except Exception:
         return set()
     return {os.path.normcase(os.path.join(ROOT, x.replace('/', os.sep)))
-            for x in r.stdout.split('\0') if x}
+            for x in r.stdout.decode('utf-8', 'replace').split('\0') if x}
 
 
 def _iter_text_files():
@@ -172,3 +183,22 @@ def test_generated_artifacts_from_private_material_are_ignored():
         if r.returncode != 0:
             leaked.append(rel)
     assert not leaked, ('这些由私人材料生成的产物没有被忽略：' + ', '.join(leaked))
+
+
+def test_skip_filter_handles_non_ascii_paths():
+    """_git_ignored 必须能过滤**中文名**的被忽略文件。
+
+    这是本文件自己的 bug：之前用 text=True 传路径，中文按本机 ANSI 编码出去、
+    git 按 UTF-8 收，于是中文名的被忽略文件根本没被过滤，扫描器直接读到
+    「知识库/题库.json」（854 条私人问答）并报成"要提交的泄露"。
+    ASCII 名字一切正常，所以第一眼看不出来 —— 这条测试专门钉住它。
+    """
+    if not os.path.isdir(os.path.join(ROOT, '.git')):
+        return
+    probes = [os.path.join(ROOT, '知识库', '题库.json'),
+              os.path.join(ROOT, 'config', 'settings.json'),
+              os.path.join(ROOT, '_realdata', 'transcript.txt')]
+    got = _git_ignored(probes)
+    missing = [p for p in probes if os.path.normcase(p) not in got]
+    assert not missing, '这些被忽略的路径没有被识别出来：' + ', '.join(missing)
+
