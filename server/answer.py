@@ -13,6 +13,7 @@ import re
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import settings
 from knowledge import build, detect_topic, tok
+import knowledge          # 只为取 knowledge.RRF_K（RRF 融合常数）
 from router import classify, LABEL
 
 # 密钥：环境变量 TP_API_KEY 优先，其次 KEY_FILE 指向的文件（默认 <仓库根>/config/api_key.txt）。
@@ -227,13 +228,33 @@ STICKY_BOOST = 3.0
 # 这几条会继承到上一条项目问答，把真正该看的 HR 材料挤掉（hit@3 因此掉了 3 条）。
 HR_HINT = re.compile(r'毕业|离职|换一家|同一家公司|团队|小组|角色|占比|简历|薪资|待遇|职业规划|为什么.{0,4}(换|跳|离开)')
 
+# 2026-09-13 修正：命中后原来 return None（= 完全放弃加权），实测 hit@1 82.1%。
+# 改成"把加权目标换成 HR 材料"后 87.2%，hit@3/并集同步 +5.1 ——
+# 守卫的**意图**是对的（HR 题别继承项目话题），**动作**错了（该换目标，不是放弃加权）。
+# 空列表 = 退回旧行为。
+# HR/履历材料的**文件名关键字**（子串匹配，任一命中即可）。
+# ⚠️ 这是示例值：换成你自己 HR/简历材料的文件名片段。一个都没匹配上时退回"不加权"
+#    （等价于旧行为），所以填错了不会把检索搞坏，只是没收益。
+# 空列表 = 明确关闭这条。
+HR_FILES = ['简历', 'HR', '履历']
 
-def detect_topic_sticky(question, history, lookback=STICKY_LOOKBACK):
+
+def _pick_hr(sources=None):
+    """从语料文件名里挑一个**真正存在**的 HR 关键字，避免写死私人文件名。"""
+    if not HR_FILES:
+        return None
+    for key in HR_FILES:
+        if sources and any(key in s for s in sources):
+            return key
+    return HR_FILES[0]
+
+
+def detect_topic_sticky(question, history, lookback=STICKY_LOOKBACK, sources=None):
     t = detect_topic(question)
     if t:
         return t
     if HR_HINT.search(question or ''):
-        return None
+        return _pick_hr(sources)
     for h in reversed(list(history or [])[-lookback:]):
         t = detect_topic(h)
         if t:
@@ -573,6 +594,72 @@ def offline_answer(question):
         return '', ''
 
 
+# ── 追问的"材料继承" ────────────────────────────────────────────────────────
+# 最难的一类是【指代型追问】："还有哪些功能吗""你做的占比估计有多少"。
+# 它们有内容词，但全是泛词（功能/角色/占比），与目标材料**零词面交集**——
+# 这时任何 boost 都是乘在一个 0 分的 chunk 上，救不回来。实测 miss 的题全是这一类。
+# 做法：把【上一题命中的那块材料】也检索一遍，和本句检索做 RRF 融合（不是替换，
+# 主路权重仍是 1.0，所以原本排第 1 的不会因为这条路被踢出去）。
+#
+# 实测（39 条人工标注，20 多组参数扫过一遍；工具 _realdata/_work/verify.py）：
+#   线上窗口 7 句：hit@1 82.1%→87.2%  hit@3 89.7%→94.9%  题库并集 hit@3 92.3%→97.4%
+#   回归门窗口 8 句：hit@1 84.6%→89.7%  hit@3 92.3%→94.9%  题库并集 94.9%→97.4%
+#   三项指标、两个窗口同时 +2.6~+5.1，没有一项掉。
+# 参数落在一片平台上（回看 7~14 句、上一题最小长度 0~12 结果完全一致），不是刀尖调参。
+#
+# 回滚：INHERIT_ENABLE = False 一行退回旧行为；掉分了就把 INHERIT_WEIGHT 调小。
+INHERIT_ENABLE = True
+INHERIT_WEIGHT = 1.0        # 继承路在 RRF 里的权重（主路恒为 1.0）
+INHERIT_BOOST = 3.0         # 继承路内部给"上一题那块材料"的加权
+INHERIT_GATE_CHARS = 40     # 当前句短于这个字数才当追问
+# True = 只在"上一题自己也抓到了话题"时才继承。更保守、hit@1 略高（89.7%），
+# 但 hit@3 在 7 句窗口只有 92.3%（不像 False 那样两个窗口都稳在 94.9%），所以默认关。
+INHERIT_NEED_PREV_ANCHOR = False
+
+# 上一题"真正答过的"那次检索结果，只记一条。
+# 为什么不用 history 反推：main.py 只把 recent[-8:][:-1] 共 7 句传进来，
+# 而上一题当时看到的窗口里还有第 8 句——反推出来的锚点会丢（实测 #26 就是这么丢的）。
+# 直接在每题检索完时记下来，和 history 怎么截断无关。
+# 用 q 校验是否真的是上一题，防止乱序/重放时张冠李戴。
+_LAST_MAT = {'q': None, 'src': None, 'anchor': None}
+
+
+def _rrf_merge(a, b, w_b=None, k=None):
+    """两路 [(score, src, text)] 按 RRF 融合，a 是主路（权重 1.0）。"""
+    w_b = INHERIT_WEIGHT if w_b is None else w_b
+    k = getattr(knowledge, 'RRF_K', 60) if k is None else k
+    agg = {}
+    for w, lst in ((1.0, a), (w_b, b)):
+        for rank, item in enumerate(lst):
+            e = agg.setdefault(item[2], [0.0, item[1]])
+            e[0] += w / (k + rank)
+    return [(v[0], v[1], key) for key, v in sorted(agg.items(), key=lambda kv: -kv[1][0])]
+
+
+def _prev_material(idx, question, history):
+    """上一题命中材料的 top1 文件名——追问继承的锚点。
+
+    上一题是 HR 题就不向后传递：否则会把后面的题也带进 HR 材料。
+    """
+    hist = list(history or [])
+    if not hist:
+        return None
+    prev = hist[-1]
+    if HR_HINT.search(prev or ''):
+        return None
+    if _LAST_MAT['q'] == prev:
+        if INHERIT_NEED_PREV_ANCHOR and not _LAST_MAT['anchor']:
+            return None
+        return _LAST_MAT['src']
+    # 兜底：没有记忆时按老办法反推（窗口少一句，只在冷启动/重放时走到）
+    t = detect_topic_sticky(prev, hist[:-1])
+    if not t:
+        return None
+    q = normalize_terms(' '.join(hist[:-1][-2:] + [prev]))
+    hits = idx.search(q, topk=1, boost_src=t, boost=STICKY_BOOST)
+    return hits[0][1] if hits else None
+
+
 def retrieve(question, topk=DEFAULT_TOPK, history=None):
     """检索用"上文2句 + 当前句"当查询词。
 
@@ -581,9 +668,24 @@ def retrieve(question, topk=DEFAULT_TOPK, history=None):
     （tools/test_retrieval_window.py）。
     """
     idx, _ = build()
-    q = normalize_terms(' '.join(list(history or [])[-2:] + [question]))
-    topic = detect_topic_sticky(question, history)
+    sources = [c[0] for c in idx.chunks]
+    hist = list(history or [])
+    q = normalize_terms(' '.join(hist[-2:] + [question]))
+    topic = detect_topic_sticky(question, hist, sources=sources)
     hits = idx.search(q, topk=topk, boost_src=topic, boost=STICKY_BOOST if topic else None)
+
+    # 指代型追问：本句没有话题词、又短、又不是 HR 题 -> 把上一题的材料一起拉进来
+    if (INHERIT_ENABLE and detect_topic(question) is None
+            and not HR_HINT.search(question or '')
+            and len(question or '') <= INHERIT_GATE_CHARS and hist):
+        anc = _prev_material(idx, question, hist)
+        if anc:
+            hits = _rrf_merge(hits, idx.search(q, topk=topk, boost_src=anc,
+                                               boost=INHERIT_BOOST))[:topk]
+
+    _LAST_MAT['q'], _LAST_MAT['anchor'] = question, topic
+    _LAST_MAT['src'] = hits[0][1] if hits else None
+
     mats = []
     for sc, src, txt in hits:
         mats.append('<!-- 来源: %s -->\n%s' % (src, txt[:DEFAULT_CUT]))

@@ -13,7 +13,12 @@ import subprocess
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-SKIP_DIRS = {'.git', '.venv', 'models', 'logs', '.tmp', '.pytest_cache', '__pycache__', 'node_modules', 'knowledge'}
+# _realdata：真实面试录音/转写的工作目录（.gitignore 已挡，见 test_private_conversation_data_is_ignored）。
+# 这两条测试走的是**文件系统**而不是 git，所以本地一旦放了录音，扫描就会把
+# 920MB 的音频和带本机路径的临时脚本一起算进来，误报成"要提交的东西"。
+# 直接跳过整个目录，同时用 test_private_conversation_data_is_ignored 保证它确实被忽略。
+SKIP_DIRS = {'.git', '.venv', 'models', 'logs', '.tmp', '.pytest_cache', '__pycache__',
+             'node_modules', 'knowledge', '_realdata'}
 TEXT_EXT = {'.py', '.ps1', '.md', '.json', '.txt', '.yml', '.yaml', '.bat', '.js', '.html', '.toml'}
 
 # 本机出现过的私人路径与密钥特征。公开仓库里一个都不允许出现。
@@ -99,6 +104,7 @@ def test_private_conversation_data_is_ignored():
         'tests/regress_expect.json',
         'tests/questions_extra.json',       # 换个名字也要被 tests/*questions*.json 兜住
         '_realdata/transcript.txt',
+        '_realdata/示例录音.m4a',                 # 整个目录（含真实录音）都必须在忽略名单里
         'logs/session_1.jsonl',
         '录音.srt',
     )
