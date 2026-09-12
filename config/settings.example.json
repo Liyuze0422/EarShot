@@ -1,0 +1,26 @@
+{
+  "_comment": "EarShot 配置模板。用法：把本文件复制成同目录的 settings.json 再改（settings.json 已被 .gitignore 忽略，不会提交）。所有键都可以不写，不写就用默认值；下划线开头的键只是说明文字，程序不读。环境变量优先级高于本文件：TP_MODEL_DIR / TP_API_KEY / TP_KEY_FILE / TP_BASE_URL / TP_LLM_MODEL / TP_CORPUS_GLOBS（分号分隔）/ TP_PORTS（分号分隔）/ TP_DSH_NODE / TP_DSH_BIN / TP_DSH_HOME。相对路径按【仓库根】解析，所以从哪个目录启动都一样。",
+
+  "model_dir": "models/SenseVoiceSmall-onnx",
+  "_comment_model_dir": "ASR 模型目录（SenseVoiceSmall ONNX int8，约 230MB）。用 tools/download_model.py 下载到这个默认位置即可。**必须纯 ASCII 路径**：模型自带的 sentencepiece 是 C++ 实现，路径里有中文会报 NOT_FOUND，而 Python 侧 os.path.exists() 却认为文件存在 —— 报错完全指不到真正的原因。把仓库整体放在纯英文路径下最省事。非 ASCII 时后端启动即退出并打印改法。",
+
+  "api_key_file": "config/api_key.txt",
+  "_comment_api_key_file": "DeepSeek 密钥文件（一行，只放密钥）。也可以不建文件，直接用环境变量 TP_API_KEY。两处都有时环境变量优先。申请：https://platform.deepseek.com  。没有密钥也能启动，只是快答线会退回本地题库。",
+
+  "base_url": "https://api.deepseek.com",
+  "_comment_base_url": "OpenAI 兼容的接口地址；走代理/自建网关时改这里。",
+
+  "llm_model": "deepseek-flash",
+  "_comment_llm_model": "快答线模型名。默认 deepseek-flash（非思考模型，实测首字 281~831ms）。不要换成思考模型（如 deepseek-v4-pro，实测首字约 6690ms，面试场景等不起）。",
+
+  "corpus_globs": ["knowledge/**/*.md", "knowledge/**/*.txt"],
+  "_comment_corpus_globs": "知识库语料 glob：检索只在你自己的材料里找，答案的事实来源全在这里。默认收 knowledge/ 下的 .md 与 .txt（含所有子目录）。可以指向别处，例如 [\"D:/面试材料/**/*.md\"]；也可以加 patterns 收 .html。语料 0 块时后端会打印提示。",
+
+  "ports": [8765, 8766, 8767, 8768, 8769],
+  "_comment_ports": "后端候选端口，从第一个开始试，被占就顺延。实际端口写进仓库根的 .runtime_port，浮窗读它连 ws://127.0.0.1:<端口>/ws。改了这里要确认 ui/app.py 读端口文件的那条路仍然有效（它优先读 .runtime_port，文件不存在才退回 8765）。",
+
+  "dsh_node": "",
+  "dsh_bin": "",
+  "dsh_home": "",
+  "_comment_dsh": "【可选】深答线：Ctrl+Shift+D 时把问题交给本机 DeepSeek Harness（dsh --profile headless）带工具回答。三项必须全填才生效，填任一为空＝关闭该功能（快答线不受影响）。例：dsh_node 填 C:/node/node.exe、dsh_bin 填 C:/dsh/lib/bin.js、dsh_home 填 C:/dsh。"
+}

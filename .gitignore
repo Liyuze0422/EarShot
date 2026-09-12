@@ -1,0 +1,40 @@
+# ── 环境与运行产物 ─────────────────────────────────────────────
+.venv/
+__pycache__/
+*.py[cod]
+.pipcache/
+.wheels/
+.tmp/
+logs/
+.runtime_port
+.ui_pid
+
+# ── ASR 模型（约 230MB，用 tools/download_model.py 下载）────────
+models/
+*.onnx
+
+# ── 只属于你本机的配置：绝对不要提交 ──────────────────────────
+config/settings.json
+config/api_key.txt
+config/company.md
+config/known_terms.md
+config/never_used.md
+
+# ── 你自己的面试材料、会话记录、测试产物 ──────────────────────
+knowledge/*
+!knowledge/README.md
+!knowledge/examples/
+!knowledge/examples/**
+*.jsonl
+tests/_out/
+tests/regress_expect.json
+
+# ── 编辑器 ────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+
+# 测试与自检产物
+.pytest_cache/
+ui/.selftest*.png
+ui/.live.png

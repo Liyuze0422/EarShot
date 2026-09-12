@@ -1,0 +1,42 @@
+[project]
+name = "earshot"
+version = "0.9.0"
+description = "EarShot（顺风耳）· 实时面试提词器：本地 ASR + BM25 检索 + LLM 快答，答案 1.3~1.5 秒上屏"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "EarShot Contributors" }]
+keywords = ["interview", "teleprompter", "asr", "sensevoice", "onnx", "bm25", "realtime"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Win32 (MS Windows)",
+  "Intended Audience :: End Users/Desktop",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+
+# 运行时依赖见 requirements.txt（Windows 专用：soundcard / PyQt6 / 回环采集）
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[tool.ruff]
+line-length = 160
+target-version = "py311"
+extend-exclude = [".venv", "models", "logs", ".tmp"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = [
+  "E501",   # 长行：提示词与中文说明本来就长
+  "E402",   # server/*.py 依赖启动期 sys.path 注入后再 import
+  "E741",   # 变量名 l / I
+  "F401",   # 部分模块按需 re-export
+  "F841",   # 调试脚本里保留的中间变量
+  "W291", "W293",  # 中文文档行尾空白
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

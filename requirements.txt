@@ -1,0 +1,31 @@
+# EarShot 直接依赖。只列代码里直接 import 的包，不抄 pip freeze；
+# 传递依赖（onnxruntime、PyQt6 的平台轮子等）交给 pip 自己解决。
+#
+# 版本下限 = 本机实测通过的版本（2026-09，Windows 11 + CPython 3.12 / 3.13 int8 模型）。
+#
+# 安装：
+#     python -m pip install -r requirements.txt
+# 模型权重不在这里（约 230MB，且不进 git）：
+#     python tools/download_model.py
+
+# ── 后端：WebSocket 服务 + 回环采集 + ASR ──────────────────────────────
+fastapi>=0.141.1
+uvicorn>=0.51.0
+soundcard>=0.4.6          # WASAPI 回环采集：只抓扬声器输出＝面试官的声音
+soundfile>=0.14.0         # .tmp/live_*.wav 落盘
+numpy>=1.26.4             # 能量 VAD、RMS 电平（numpy 2.x 未在实测环境验证）
+funasr_onnx>=0.4.3        # SenseVoiceSmall ONNX 推理（onnxruntime 由它带入）
+
+# ── 检索 ──────────────────────────────────────────────────────────────
+jieba>=0.42.1             # 中文分词（BM25 词级通道）
+
+# ── 快答线：DeepSeek 流式生成 ─────────────────────────────────────────
+openai>=3.3.1             # OpenAI 兼容客户端，base_url 指向 https://api.deepseek.com
+
+# ── 浮窗 ──────────────────────────────────────────────────────────────
+PyQt6>=6.11.0
+websockets>=16.1.1        # 浮窗连 ws://127.0.0.1:<端口>/ws
+
+# ── 开发用（运行时不需要；CI 与 tests/ 需要）──────────────────────────
+# pytest>=8.0
+# ruff>=0.6

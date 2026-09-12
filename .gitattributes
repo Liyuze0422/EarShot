@@ -1,0 +1,15 @@
+# 统一换行符：Windows 脚本必须 CRLF（cmd.exe 对 LF-only 的 .bat 会解析错），
+# 文本与 Markdown 用 LF，方便 diff。
+* text=auto
+
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+*.py   text eol=lf
+*.md   text eol=lf
+*.json text eol=lf
+*.yml  text eol=lf
+
+# 二进制资源
+*.png  binary
+*.onnx binary
