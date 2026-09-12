@@ -16,6 +16,10 @@
   base_url       https://api.deepseek.com
   llm_model      deepseek-flash
   corpus_globs   知识库语料 glob 数组，默认 <仓库根>/knowledge 下的 *.md / *.txt
+  corpus_profile 资料包名（可选）。留空 = 老行为（扫整个 knowledge/）；
+                 填了名字 P = 只扫 knowledge/_base/ 和 knowledge/P/。
+                 用途：个人材料放 _base，JD/公司介绍按公司各放一个包，面试哪家切哪家。
+                 可用包名工具看：python tools/profiles.py --list
   ports          [8765, 8766, 8767, 8768, 8769]，被占自动顺延，实际端口写 .runtime_port
   dsh_node / dsh_bin / dsh_home
                  深答线（可选，三项都填才生效；留空＝关闭深答线）
@@ -37,6 +41,8 @@ _DEFAULTS = {
     'llm_model': 'deepseek-flash',
     'corpus_globs': [os.path.join(REPO_ROOT, 'knowledge', '**', '*.md'),
                      os.path.join(REPO_ROOT, 'knowledge', '**', '*.txt')],
+    # 资料包（空 = 老行为）。见文件头「corpus_profile」。
+    'corpus_profile': '',
     'ports': [8765, 8766, 8767, 8768, 8769],
     'dsh_node': '',
     'dsh_bin': '',
@@ -58,6 +64,7 @@ _ENV_KEYS = {
     'base_url': 'TP_BASE_URL',
     'llm_model': 'TP_LLM_MODEL',
     'corpus_globs': 'TP_CORPUS_GLOBS',
+    'corpus_profile': 'TP_CORPUS_PROFILE',
     'ports': 'TP_PORTS',
     'dsh_node': 'TP_DSH_NODE',
     'dsh_bin': 'TP_DSH_BIN',
@@ -169,8 +176,18 @@ def api_key_path():
 
 
 def corpus_globs():
-    """知识库语料 glob 列表。"""
+    """知识库语料 glob 列表（未启用资料包时的"全量"模式）。"""
     return list(load()['corpus_globs'])
+
+
+def corpus_profile():
+    """当前资料包名；空字符串 = 未启用（扫整个 knowledge/）。"""
+    return str(load().get('corpus_profile') or '').strip()
+
+
+def knowledge_root():
+    """知识库根目录（<仓库根>/knowledge）。"""
+    return os.path.join(REPO_ROOT, 'knowledge')
 
 
 def port_list():
@@ -262,6 +279,7 @@ def describe():
     for k in ('model_dir', 'api_key_file', 'base_url', 'llm_model', 'ports'):
         lines.append('/%s = %s' % (k, cfg[k]))
     lines.append('/corpus_globs = %s' % cfg['corpus_globs'])
+    lines.append('/corpus_profile = %s' % (cfg.get('corpus_profile') or '（未启用）'))
     lines.append('/dsh_paths = %s' % (dsh_paths() or '未配置（深答线关闭）',))
     return '\n'.join(lines)
 

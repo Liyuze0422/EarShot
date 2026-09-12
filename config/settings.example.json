@@ -16,6 +16,9 @@
   "corpus_globs": ["knowledge/**/*.md", "knowledge/**/*.txt"],
   "_comment_corpus_globs": "知识库语料 glob：检索只在你自己的材料里找，答案的事实来源全在这里。默认收 knowledge/ 下的 .md 与 .txt（含所有子目录）。可以指向别处，例如 [\"D:/面试材料/**/*.md\"]；也可以加 patterns 收 .html。语料 0 块时后端会打印提示。",
 
+  "corpus_profile": "",
+  "_comment_corpus_profile": "资料包（可选，留空=老行为，扫整个 knowledge/）。填了名字 P 就只检索 knowledge/_base/ 和 knowledge/P/。用途：个人通用材料放 knowledge/_base/，每家公司一个包（JD、公司介绍、面经），面试哪家切哪家。为什么要分包：实测往知识库里掺「讲同一批话题」的文本会直接抢排名 —— 掺 25% 本人面试录音 hit@1 从 89.7% 塌到 41.0%，而掺 2 倍**异题材**文档只掉 2.5；别人的面试录音虽然只掉 5 个点，但没有正面价值（不是你的经历）。切换：改这里 / 环境变量 TP_CORPUS_PROFILE / 运行时 knowledge.set_profile('公司名')。管理命令：python tools/profiles.py --list | --new 公司名 | --check 公司名。改完要重启后端。文件名以 _ 开头的材料不参与检索（用来放笔记）。",
+
   "ports": [8765, 8766, 8767, 8768, 8769],
   "_comment_ports": "后端候选端口，从第一个开始试，被占就顺延。实际端口写进仓库根的 .runtime_port，浮窗读它连 ws://127.0.0.1:<端口>/ws。改了这里要确认 ui/app.py 读端口文件的那条路仍然有效（它优先读 .runtime_port，文件不存在才退回 8765）。",
 

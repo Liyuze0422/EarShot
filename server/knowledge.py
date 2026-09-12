@@ -45,7 +45,57 @@ import settings
 # 语料位置：默认 <仓库根>/knowledge 下的 *.md / *.txt。
 # 改法：编辑 config/settings.json 的 corpus_globs，或设环境变量
 # TP_CORPUS_GLOBS="D:\材料\**\*.md;D:\材料\**\*.txt"（分号分隔）。
-CORPUS_GLOBS = settings.corpus_globs()
+#
+# ── 资料包（corpus_profile）──────────────────────────────────────────────
+# 实测（_realdata/_work/bench_dilute*.py）：往知识库里掺「讲同一批话题」的文本会**直接抢排名**——
+# 掺 25% 本人面试录音，hit@1 从 89.7% 塌到 41.0%；而掺 2 倍**异题材**文档只掉 2.5。
+# 结论：个人经历材料千万不能和别人的经历混在一起，按面试分包是唯一干净的办法。
+# 约定：
+#   knowledge/_base/      所有面试通用的个人材料
+#   knowledge/<包名>/      某家公司/某轮专用（JD、公司介绍、面经），面试哪家切哪家
+#   corpus_profile 留空     = 老行为（扫整个 knowledge/），不做任何改变
+_UNSET = object()
+_runtime_profile = _UNSET
+
+
+def active_profile():
+    """当前生效的资料包名（运行时覆盖 > 配置/环境变量）。空 = 未启用分包。"""
+    p = settings.corpus_profile() if _runtime_profile is _UNSET else str(_runtime_profile)
+    return (p or '').strip()
+
+
+def set_profile(name):
+    """切换资料包并清掉索引缓存（下次 build() 自动重建）。
+
+    set_profile('字节跳动') -> 只扫 _base + 该包
+    set_profile('')         -> 显式退回"扫整个 knowledge/"
+    set_profile()           -> 撤销运行时覆盖，回到 config/settings.json / TP_CORPUS_PROFILE
+    """
+    global _runtime_profile
+    _runtime_profile = _UNSET if name is None else str(name).strip()
+    _cache.clear()
+    return active_profile()
+
+
+def list_profiles():
+    """knowledge/ 下可用的资料包名（下划线开头的是内部目录，不算）。"""
+    root = settings.knowledge_root()
+    if not os.path.isdir(root):
+        return []
+    return sorted(d for d in os.listdir(root)
+                  if not d.startswith('_') and os.path.isdir(os.path.join(root, d)))
+
+
+def corpus_globs():
+    """当前生效的语料 glob（启用分包时 = _base/ + 该包/）。"""
+    prof = active_profile()
+    if not prof:
+        return settings.corpus_globs()
+    root = settings.knowledge_root()
+    out = []
+    for d in (os.path.join(root, '_base'), os.path.join(root, prof)):
+        out += [os.path.join(d, '**', '*.md'), os.path.join(d, '**', '*.txt')]
+    return out
 CHUNK_MIN, CHUNK_MAX = 300, 700
 TITLE_WEIGHT = 4          # 文件名在词袋里重复几次
 
@@ -104,12 +154,16 @@ def detect_topic(text):
 
 def load_docs():
     files = []
-    for g in CORPUS_GLOBS:
+    for g in corpus_globs():
         # recursive=True：默认 glob 里的 "**" 才算"任意层子目录"，
         # 否则 knowledge/**/*.md 匹配不到直接放在 knowledge/ 下的文件。
         files += glob.glob(g, recursive=True)
     docs = []
     for f in sorted(set(files)):
+        # 名字以 _ 开头的文件不参与检索：留个"往包里放笔记/待办"的口子，
+        # 否则随手写的备忘会被当成材料检索出来（还会稀释排名）。
+        if os.path.basename(f).startswith('_'):
+            continue
         try:
             raw = open(f, 'r', encoding='utf-8', errors='ignore').read()
         except Exception:
@@ -288,9 +342,28 @@ class BM25:
 _cache = {}
 
 
+def _warn_profile():
+    """包名打错时别静默降级 —— 面试当天才发现只剩几份通用材料就晚了。"""
+    prof = active_profile()
+    if not prof:
+        return
+    root = settings.knowledge_root()
+    pack = os.path.join(root, prof)
+    if not os.path.isdir(pack):
+        cand = list_profiles()
+        print('[知识库] 资料包【%s】不存在：%s\n'
+              '  现在只会用到 knowledge/_base/ 里的通用材料。\n'
+              '  建包：python tools/profiles.py --new %s\n'
+              '  已有的包：%s' % (prof, pack, prof, '、'.join(cand) or '（无）'))
+    elif not os.path.isdir(os.path.join(root, '_base')):
+        print('[知识库] 启用了资料包【%s】但还没有 knowledge/_base/ —— '
+              '通用个人材料（项目报告、简历…）会被漏掉。' % prof)
+
+
 def build():
     if 'idx' in _cache:
         return _cache['idx'], _cache['chunks']
+    _warn_profile()
     docs = load_docs()
     chunks = []
     for name, text in docs:
@@ -299,7 +372,7 @@ def build():
         # 空语料不报错也能"跑起来"，但快答线会退化成让模型凭印象编 —— 面试当天才发现就晚了。
         print('[知识库] 语料 0 块：检索不到任何材料，答案会没有事实依据。\n'
               '  把面试材料（.md / .txt）放进 %s，或改 config/settings.json 的 corpus_globs。\n'
-              '  当前 glob: %s' % (os.path.join(settings.REPO_ROOT, 'knowledge'), CORPUS_GLOBS))
+              '  当前 glob: %s' % (os.path.join(settings.REPO_ROOT, 'knowledge'), corpus_globs()))
     idx = BM25(chunks)
     _cache['idx'], _cache['chunks'] = idx, chunks
     return idx, chunks

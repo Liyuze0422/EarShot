@@ -198,12 +198,29 @@ def load_key():
     return settings.api_key()
 
 
+def _company_path():
+    """公司背景文件：config/company.md 优先，其次是当前资料包里的 company.md。
+
+    这样"按公司分包"时，公司介绍可以跟着包走（knowledge/<包名>/company.md），
+    不用每换一家都去手改 config/company.md。config/company.md 仍然是最高的显式覆盖。
+    """
+    if os.path.exists(COMPANY_FILE):
+        return COMPANY_FILE
+    prof = knowledge.active_profile()
+    if prof:
+        p = os.path.join(settings.knowledge_root(), prof, 'company.md')
+        if os.path.exists(p):
+            return p
+    return ''
+
+
 def load_company():
     """读目标公司背景,过滤掉模板占位行。"""
-    if not os.path.exists(COMPANY_FILE):
+    path = _company_path()
+    if not path:
         return ''
     out = []
-    for line in open(COMPANY_FILE, 'r', encoding='utf-8'):
+    for line in open(path, 'r', encoding='utf-8'):
         s = line.strip()
         if not s or s.startswith('#') or s.startswith('>') or s.startswith('（例'):
             continue
