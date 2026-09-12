@@ -33,13 +33,38 @@ FORBIDDEN = [
 ]
 
 
+def _git_ignored(paths):
+    """用 git 自己的忽略规则过滤掉"本来就不会提交"的文件。
+
+    为什么必须问 git、而不是再往 SKIP_DIRS 里加一条：这些检查走的是**文件系统**，
+    看不到 .gitignore。历史上已经栽过两次 —— 先是 _realdata/（真实录音），
+    再是 config/settings.json（含本机材料路径）。手写名单永远会漏下一个。
+    """
+    rel = [os.path.relpath(p, ROOT).replace('\\', '/') for p in paths]
+    if not rel:
+        return set()
+    try:
+        r = subprocess.run(['git', 'check-ignore', '-z', '--stdin'], cwd=ROOT,
+                           input='\0'.join(rel) + '\0',
+                           capture_output=True, text=True, timeout=60)
+    except Exception:
+        return set()
+    return {os.path.normcase(os.path.join(ROOT, x.replace('/', os.sep)))
+            for x in r.stdout.split('\0') if x}
+
+
 def _iter_text_files():
+    cands = []
     for dirpath, dirnames, filenames in os.walk(ROOT):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
         for name in filenames:
             ext = os.path.splitext(name)[1].lower()
             if ext in TEXT_EXT or name.endswith('.example') or name in ('LICENSE', '.gitignore', '.gitattributes'):
-                yield os.path.join(dirpath, name)
+                cands.append(os.path.join(dirpath, name))
+    skip = _git_ignored(cands)
+    for p in cands:
+        if os.path.normcase(p) not in skip:
+            yield p
 
 
 def test_no_personal_paths_or_secrets():
@@ -59,12 +84,17 @@ def test_no_personal_paths_or_secrets():
 def test_no_large_files_committed():
     limit = 20 * 1024 * 1024
     big = []
+    cands = []
     for dirpath, dirnames, filenames in os.walk(ROOT):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
         for name in filenames:
-            p = os.path.join(dirpath, name)
-            if os.path.getsize(p) > limit:
-                big.append('%s (%.1f MB)' % (os.path.relpath(p, ROOT), os.path.getsize(p) / 2 ** 20))
+            cands.append(os.path.join(dirpath, name))
+    skip = _git_ignored(cands)
+    for p in cands:
+        if os.path.normcase(p) in skip:
+            continue
+        if os.path.getsize(p) > limit:
+            big.append('%s (%.1f MB)' % (os.path.relpath(p, ROOT), os.path.getsize(p) / 2 ** 20))
     assert not big, '仓库里混进了大文件（模型请用 tools/download_model.py 下载）：' + ', '.join(big)
 
 

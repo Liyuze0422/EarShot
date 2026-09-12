@@ -37,6 +37,7 @@ import os
 import re
 import math
 import glob
+import json
 from collections import Counter
 import jieba
 
@@ -143,6 +144,46 @@ TOPIC_TERMS = {
     '项目C': ['微调', 'LoRA', 'QLoRA', '量化', '显存', '语料', '训练集', '数据集', '标注'],
 }
 TOPIC_BOOST = 3.0
+
+
+# ── 私有词表：用 config/ 里的真词覆盖上面的示例 ────────────────────────────
+# 上面两个表是**示例**（公开仓库不能带你的项目名）。真正要用的词放 config/ 下，
+# 那两份被 .gitignore 挡着，不会被推到 GitHub：
+#   config/domain_words.txt    一行一个词（# 开头是注释）—— 钉住会被 jieba 切碎的专有词
+#   config/topic_terms.json    {"项目1": ["无人机", "地面站", …], "项目2": [...]}
+# 为什么做成文件而不是让你直接改代码：以前只能改 knowledge.py，一改就和上游分叉，
+# 公开仓库那份就永远是示例。真实配置和算法混在一起，两份代码迟早漂。
+# 移过来的命令：python tools/migrate_private.py --from <私人副本/server>
+def _apply_private_terms():
+    global TOPIC_TERMS, DOMAIN_WORDS
+    cfg_dir = os.path.join(settings.REPO_ROOT, 'config')
+
+    p = os.path.join(cfg_dir, 'topic_terms.json')
+    if os.path.exists(p):
+        try:
+            d = json.load(open(p, encoding='utf-8'))
+            d = {str(k): [str(x) for x in v]
+                 for k, v in d.items() if isinstance(v, list) and v}
+            if d:
+                TOPIC_TERMS = d
+        except Exception as e:
+            print('[知识库] config/topic_terms.json 读不了，继续用内置示例：%s' % e)
+
+    p = os.path.join(cfg_dir, 'domain_words.txt')
+    if os.path.exists(p):
+        words = []
+        for line in open(p, encoding='utf-8'):
+            w = line.strip()
+            if w and not w.startswith('#'):
+                words.append(w)
+        if words:
+            DOMAIN_WORDS = words
+            for w in words:
+                jieba.add_word(w)
+    return TOPIC_TERMS, DOMAIN_WORDS
+
+
+_apply_private_terms()
 
 
 def detect_topic(text):
