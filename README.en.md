@@ -7,6 +7,7 @@ and 1.3–1.5 seconds later a ready-to-speak answer appears on a floating window
 
 Local ASR + local retrieval + LLM rewriting — everything runs on your own machine.
 
+[![CI](https://github.com/Liyuze0422/EarShot/actions/workflows/ci.yml/badge.svg)](https://github.com/Liyuze0422/EarShot/actions/workflows/ci.yml)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)
