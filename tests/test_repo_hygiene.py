@@ -9,6 +9,7 @@ CI 里单独跑（见 .github/workflows/ci.yml 的 hygiene job）。
 """
 import os
 import re
+import subprocess
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -82,3 +83,30 @@ def test_personal_config_files_are_not_shipped_as_templates():
     for name in personal:
         example = name.replace('.md', '.example.md').replace('.json', '.example.json').replace('.txt', '.example.txt')
         assert os.path.exists(os.path.join(ROOT, 'config', example)), '缺少模板 config/' + example
+
+def test_private_conversation_data_is_ignored():
+    """真实提问 / 回归期望 / 录音转写都必须留在本地。
+
+    这些文件一旦被 git add -A 带上去，就是公开仓库里的面试原文事故。.gitignore 负责挡，
+    这条测试负责保证「挡的规则没被谁手滑删掉」—— 加它的直接原因：准备用大量真实录音
+    扩回归集之前，先确认数据放进来不会漏出去。
+    """
+    if not os.path.isdir(os.path.join(ROOT, '.git')):
+        return          # 不是 git 工作副本（下载 ZIP 的那种），无从检查也无需检查
+    must_ignore = (
+        'tests/real_questions.json',
+        'tests/synthetic_questions.json',
+        'tests/regress_expect.json',
+        'tests/questions_extra.json',       # 换个名字也要被 tests/*questions*.json 兜住
+        '_realdata/transcript.txt',
+        'logs/session_1.jsonl',
+        '录音.srt',
+    )
+    leaked = []
+    for rel in must_ignore:
+        r = subprocess.run(['git', 'check-ignore', '-q', rel], cwd=ROOT,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if r.returncode != 0:
+            leaked.append(rel)
+    assert not leaked, ('这些路径没有被 .gitignore 忽略，一旦提交就是面试原文泄露：'
+                        + ', '.join(leaked))

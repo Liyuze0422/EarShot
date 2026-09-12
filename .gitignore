@@ -28,6 +28,19 @@ knowledge/*
 *.jsonl
 tests/_out/
 tests/regress_expect.json
+# 真实提问 / 合成提问：含面试原文与你的材料名 —— 提交上去就是事故
+tests/real_questions.json
+tests/synthetic_questions.json
+tests/*questions*.json
+
+# 录音与转写原文：留在本地，永远不要进仓库
+_realdata/
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.srt
+*.vtt
 
 # ── 编辑器 ────────────────────────────────────────────────────
 .vscode/
