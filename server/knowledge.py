@@ -196,6 +196,27 @@ def chunk(text, src):
     return out
 
 
+# ── 标识符压平：max_len ↔ maxlen ────────────────────────────────────────
+# ASR 听不见下划线、点号、连字符。面试官看着你的代码问"max_len 是怎么定的"，
+# 转写出来很可能是"maxlen"，而材料里写的是 max_len。
+# 不压平的话两边分词成 {max,len} vs {maxlen}，**一个词都对不上**，这题就白丢了。
+# 实测材料里有 1094 种带分隔符的标识符（max_tokens / adapter_config.json / eval.py / tf-idf…），
+# 全是这个坑。驼峰（LangGraph -> langgraph）jieba 本来就整块留着，不受影响。
+# 只加不删：原有的分词结果一个不动，额外把压平形式也塞进词袋。
+_IDENT_RUN = re.compile(r'[A-Za-z][A-Za-z0-9]*(?:[._\-][A-Za-z0-9]+)+')
+_IDENT_MIN = 4
+
+
+def _flat_idents(s):
+    """把 s 里带分隔符的 ASCII 标识符压平：max_len -> maxlen。"""
+    out = []
+    for m in _IDENT_RUN.findall(s or ''):
+        flat = re.sub(r'[^a-z0-9]', '', m.lower())
+        if len(flat) >= _IDENT_MIN:
+            out.append(flat)
+    return out
+
+
 def tok(s, drop_stop=True):
     ws = []
     for w in jieba.lcut(s):
@@ -205,6 +226,7 @@ def tok(s, drop_stop=True):
         if drop_stop and w in STOP:
             continue
         ws.append(w)
+    ws += _flat_idents(s)
     return ws
 
 
