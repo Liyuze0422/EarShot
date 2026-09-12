@@ -77,8 +77,11 @@ EarShot 不替你回答问题，它做的是**在正确的时刻，把你准备�
 **第 0 步很重要：把仓库放在纯英文路径下**（比如 `C:\dev\EarShot`）。
 中文路径会让 sentencepiece 的 C++ 层报 `NOT_FOUND`，而 Python 侧却认为文件好好地在着 —— 这个坑很难查。详见 [安装教程](docs/安装教程.md)。
 
+> 没装 git 也没关系：打开 https://github.com/Liyuze0422/EarShot ，点绿色的 **Code → Download ZIP**，
+> 解压到 `C:\dev\EarShot` 效果一样（**路径必须是纯英文**，原因见下面第 0 步）。
+
 ```powershell
-git clone https://github.com/<你的用户名>/EarShot.git C:\dev\EarShot
+git clone https://github.com/Liyuze0422/EarShot.git C:\dev\EarShot
 cd C:\dev\EarShot
 
 python -m venv .venv
