@@ -146,6 +146,28 @@ def main():
                 json.dump(terms, f, ensure_ascii=False, indent=2)
             print('已写 config/topic_terms.json（%d 个项目）' % len(terms))
 
+    # ---- 回归数据 + 依赖私人样本的检查脚本 ----
+    # 这些也全在 .gitignore 里。不搬过来的话，迁移完 tools/regress.py 会报
+    # 「没有可判的项」—— 那就等于没法验证迁移前后质量一致，白白丢掉安全感。
+    root_src = os.path.dirname(os.path.abspath(a.src))     # server 的上一级 = 旧副本根
+    copied = []
+    for rel in ('知识库/题库.json',
+                'tests/real_questions.json', 'tests/synthetic_questions.json',
+                'tests/regress_expect.json', 'tests/quality_sample.json',
+                'tools/test_gap_fp.py', 'tools/test_answer_check.py', 'tools/test_faults.py'):
+        s = os.path.join(root_src, rel)
+        d = os.path.join(ROOT, rel)
+        if os.path.exists(s) and not os.path.exists(d):
+            os.makedirs(os.path.dirname(d), exist_ok=True)
+            shutil.copy2(s, d)
+            copied.append(rel)
+    if copied:
+        print()
+        print('已搬回归数据 %d 份（都在 .gitignore 里，不会提交）：' % len(copied))
+        for rel in copied:
+            print('  %s' % rel)
+        print('现在可以跑 python tools/regress.py 验证质量没变。')
+
     # ---- 提示材料要不要挪进 _base ----
     base = os.path.join(a.knowledge_dir, '_base')
     os.makedirs(base, exist_ok=True)

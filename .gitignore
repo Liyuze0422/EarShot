@@ -31,6 +31,7 @@ knowledge/*
 *.jsonl
 tests/_out/
 tests/regress_expect.json
+tests/quality_sample.json
 # 真实提问 / 合成提问：含面试原文与你的材料名 —— 提交上去就是事故
 tests/real_questions.json
 tests/synthetic_questions.json
@@ -41,6 +42,12 @@ tests/*questions*.json
 知识库/
 bank.json
 *题库*.json
+
+# 依赖你私人样本的检查脚本：regress.py 会在缺失时自动跳过。
+# 它们的内容贴着你的材料（外名词样本、期望答案），和 tests/*.json 同级。
+tools/test_gap_fp.py
+tools/test_answer_check.py
+tools/test_faults.py
 
 # 录音与转写原文：留在本地，永远不要进仓库
 _realdata/

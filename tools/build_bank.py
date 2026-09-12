@@ -122,6 +122,7 @@ if __name__ == '__main__':
     ap.add_argument('--smoke', action='store_true')
     ap.add_argument('--followup', action='store_true', help='生成"连续追问式"问法')
     ap.add_argument('--merge', action='store_true', help='合并进已有题库而不是覆盖')
+    ap.add_argument('--force', action='store_true', help='即使会缩小题库也照写（默认会中止并提示）')
     ap.add_argument('--workers', type=int, default=WORKERS)
     args = ap.parse_args()
     if args.followup:
@@ -143,15 +144,31 @@ if __name__ == '__main__':
             allq += items
             print('  [%2d/%d] %-44s +%2d 条 %s' % (n, len(ws), src[:42], len(items), err[:40]), flush=True)
 
-    if args.merge and os.path.exists(OUT):
-        old = json.load(open(OUT, encoding='utf-8')).get('items', [])
-        print('合并已有题库 %d 条' % len(old))
-        allq = old + allq
+    n_old = 0
+    if os.path.exists(OUT):
+        n_old = len(json.load(open(OUT, encoding='utf-8')).get('items', []))
+    if args.merge and n_old:
+        print('合并已有题库 %d 条' % n_old)
+        allq = json.load(open(OUT, encoding='utf-8')).get('items', []) + allq
     seen = set(); uniq = []
     for it in allq:
         if it['q'] in seen:
             continue
         seen.add(it['q']); uniq.append(it)
+
+    # 别让「重跑一次」把攒了很久的题库变小。
+    # 追问预案（main.py 里的 followups）要求同一章节命中 ≥2 条，题库一小它就哑了 ——
+    # 这个症状看着像代码坏了，实际只是题库缩水。实测：854 条的题库能出预案，
+    # 覆盖重建出来的 383 条一条都出不来。
+    if n_old and len(uniq) < n_old:
+        print()
+        print('⚠️  已有题库 %d 条，这次只生成 %d 条 —— 直接写下去会把题库**变小**。' % (n_old, len(uniq)))
+        print('   追问预案会因此失灵（它要求同章节 ≥2 条命中）。')
+        print('   要保留旧的：加 --merge（旧的并进来，只去重不删）。')
+        print('   确实想只留新生成的：加 --force。')
+        if not args.force:
+            print('已中止，没有写文件。')
+            sys.exit(2)
 
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     json.dump({'source': '面试材料自动生成', 'count': len(uniq), 'items': uniq},
