@@ -188,7 +188,35 @@ EarShot/
 | `config/known_terms.md` | 我会、但材料里没写的技术。防止提词器让我对这些词说「我没接触过」 |
 | `config/never_used.md` | 材料里出现过、但我其实没做过的。命中就走「坦诚」那套，绝不装懂 |
 
-其余开关放 `config/settings.json`（模板见 `config/settings.example.json`）：模型目录、语料 glob、端口、模型名、超时、深答线命令等。环境变量优先级更高（`TP_MODEL_DIR` / `TP_API_KEY` / `TP_CORPUS_GLOBS` …）。详见 [配置手册](docs/配置手册.md)。
+另外两份**只给检索用**的词表（同样被 gitignore）：
+
+| 文件 | 作用 |
+|---|---|
+| `config/domain_words.txt` | 钉住会被 jieba 切碎的专业词（`工作流`→`工作/流` 这种） |
+| `config/topic_terms.json` | 判断「这句话在问哪个项目」，命中的材料加权 3 倍 |
+
+其余开关放 `config/settings.json`（模板见 `config/settings.example.json`）：模型目录、语料 glob、资料包、端口、模型名、超时、深答线命令等。环境变量优先级更高（`TP_MODEL_DIR` / `TP_API_KEY` / `TP_CORPUS_GLOBS` / `TP_CORPUS_PROFILE` …）。详见 [配置手册](docs/配置手册.md)。
+
+### 资料包：按公司把材料切开
+
+材料多了会互相抢排名——**实测往 338 块的知识库里掺 25% 自己的面试录音，hit@1 从 89.7% 塌到 41.0%**
+（掺 2 倍**异题材**文档只掉 2.5）。所以：
+
+```
+knowledge/
+  _base/            所有面试通用：项目报告、简历、数字卡片……
+  字节跳动/          这家公司专用：JD.md、公司介绍.md、一面面经.md……
+```
+
+```bash
+python tools/profiles.py --new 字节跳动     # 建包
+python tools/profiles.py --check 字节跳动   # 试算会加载哪些材料
+```
+
+再在 `config/settings.json` 填 `"corpus_profile": "字节跳动"`。**留空 = 老行为**，不分包也能用。
+
+> 手里有更早的自用副本、想换成正式版？一条命令搬完你的材料路径、词表、模型路径和密钥：
+> `python tools/migrate_private.py --from <旧副本>/server`。见 [从自用副本迁移](docs/从自用副本迁移.md)。
 
 ## 文档
 
@@ -202,6 +230,7 @@ EarShot/
 | [故障排查](docs/故障排查.md) | 症状 → 原因 → 处理 |
 | [常见问题](docs/常见问题FAQ.md) | 联网、费用、隐私、合规、平台 |
 | [隐私与安全](docs/隐私与安全.md) | 数据流、密钥、防共享边界、使用伦理 |
+| [从自用副本迁移](docs/从自用副本迁移.md) | 把旧的自改版本换成正式版，一行代码不用改 |
 | [发布到 GitHub](docs/发布到GitHub.md) | 把本仓库推到你自己的账号 + 开 Wiki |
 
 ## 隐私

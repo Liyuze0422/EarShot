@@ -36,6 +36,12 @@ tests/real_questions.json
 tests/synthetic_questions.json
 tests/*questions*.json
 
+# 题库：由你的材料自动生成（tools/build_bank.py），内容是**你的项目问答原文**。
+# 它和知识库材料同等级别 —— 提交上去等于把材料发到公开仓库。踩过一次，见 CHANGELOG 0.9.3。
+知识库/
+bank.json
+*题库*.json
+
 # 录音与转写原文：留在本地，永远不要进仓库
 _realdata/
 *.wav

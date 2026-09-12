@@ -26,14 +26,16 @@ CFG = os.path.join(ROOT, 'config')
 WANT = ('CORPUS_GLOBS', 'DOMAIN_WORDS', 'TOPIC_TERMS')
 
 
-def read_constants(path):
+def read_constants(path, want=WANT):
     """用 AST 读常量，不 import —— 不执行对方的代码，副作用为零。"""
+    if not os.path.exists(path):
+        return {}
     tree = ast.parse(open(path, encoding='utf-8').read())
     out = {}
     for node in tree.body:
         if isinstance(node, ast.Assign):
             for t in node.targets:
-                if isinstance(t, ast.Name) and t.id in WANT:
+                if isinstance(t, ast.Name) and t.id in want:
                     try:
                         out[t.id] = ast.literal_eval(node.value)
                     except Exception:
@@ -56,10 +58,15 @@ def main():
         print('找不到 %s' % src)
         return 1
     c = read_constants(src)
+    # 模型路径在 main.py、密钥路径在 answer.py，各读各的
+    c.update(read_constants(os.path.join(a.src, 'main.py'), ('MODEL_DIR',)))
+    c.update(read_constants(os.path.join(a.src, 'answer.py'), ('KEY_FILE',)))
 
     globs = c.get('CORPUS_GLOBS') or []
     words = c.get('DOMAIN_WORDS') or []
     terms = c.get('TOPIC_TERMS') or {}
+    model = c.get('MODEL_DIR') or ''
+    keyf = c.get('KEY_FILE') or ''
 
     print('从 %s 读到：' % src)
     print('  语料 glob      %d 条' % len(globs))
@@ -68,13 +75,19 @@ def main():
     print('  领域词          %d 个' % len(words))
     print('      %s' % '、'.join(words[:12]) + ('…' if len(words) > 12 else ''))
     print('  话题词表        %d 个项目：%s' % (len(terms), '、'.join(terms)))
+    if model:
+        print('  ASR 模型目录    %s%s' % (model, '' if os.path.isdir(model) else '   ⚠️ 目录不存在'))
+    if keyf:
+        print('  DeepSeek 密钥   %s%s' % (keyf, '' if os.path.isfile(keyf) else '   ⚠️ 文件不存在'))
     print()
 
     if not a.write:
         print('（只是报告。确认无误后加 --write 落盘）')
         print()
         print('会写这几个文件（都在 config/ 下，已被 .gitignore 挡住）：')
-        print('  config/settings.json      corpus_globs 指向你现在的材料位置')
+        print('  config/settings.json      corpus_globs' + (' / model_dir' if model else ''))
+        if keyf and os.path.isfile(keyf):
+            print('  config/api_key.txt        从 %s 复制一份（省得两边跑）' % keyf)
         print('  config/domain_words.txt   领域词表')
         print('  config/topic_terms.json   话题词表')
         print('另外会建 %s\\_base\\ 并提示你把材料挪进去（不挪也能先跑，见下）。' % a.knowledge_dir)
@@ -89,13 +102,33 @@ def main():
         except Exception as e:
             print('config/settings.json 解析失败，为安全起见不覆盖：%s' % e)
             return 1
+    chg = []
     if globs and (a.force or not cur.get('corpus_globs')):
         cur['corpus_globs'] = globs
+        chg.append('corpus_globs')
+    elif globs:
+        print('settings.json 已有 corpus_globs，跳过（要覆盖加 --force）')
+    if model and os.path.isdir(model) and (a.force or not cur.get('model_dir')):
+        cur['model_dir'] = model
+        chg.append('model_dir')
+
+    # 密钥：复制一份到 config/api_key.txt，别让两个副本共用一个外部文件
+    # （官方默认位置就是它，且已被 .gitignore 挡住）
+    ap_dst = os.path.join(CFG, 'api_key.txt')
+    if keyf and os.path.isfile(keyf) and not os.path.exists(ap_dst):
+        try:
+            t = open(keyf, encoding='utf-8').read().strip()
+            if t:
+                with open(ap_dst, 'w', encoding='utf-8') as f:
+                    f.write(t + '\n')
+                chg.append('api_key.txt（已复制，不打印内容）')
+        except Exception as e:
+            print('复制密钥失败（不影响其他项）：%s' % e)
+
+    if chg:
         with open(sp, 'w', encoding='utf-8') as f:
             json.dump(cur, f, ensure_ascii=False, indent=2)
-        print('已写 config/settings.json 的 corpus_globs')
-    elif globs:
-        print('config/settings.json 已有 corpus_globs，跳过（要覆盖加 --force）')
+        print('已写 config/settings.json：%s' % '、'.join(chg))
 
     if words:
         p = os.path.join(CFG, 'domain_words.txt')
