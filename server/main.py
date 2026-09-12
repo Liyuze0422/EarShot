@@ -309,7 +309,7 @@ def ask(question, with_deep=False, force=False):
 def capture_once(vad_thresh):
     """跑一次采集循环。设备掉了/换设备会抛异常，交给 capture_forever 重连。"""
     asr = STATE['asr']
-    vad = EnergyVAD(thresh=vad_thresh)
+    vad = EnergyVAD(thresh=vad_thresh, end_ms=int(settings.get('vad_end_ms', 600) or 600))
     cap = LoopbackCapture()
     STATE['device'] = cap.device_name
     STATE['listening'] = True

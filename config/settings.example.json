@@ -22,5 +22,12 @@
   "dsh_node": "",
   "dsh_bin": "",
   "dsh_home": "",
-  "_comment_dsh": "【可选】深答线：Ctrl+Shift+D 时把问题交给本机 DeepSeek Harness（dsh --profile headless）带工具回答。三项必须全填才生效，填任一为空＝关闭该功能（快答线不受影响）。例：dsh_node 填 C:/node/node.exe、dsh_bin 填 C:/dsh/lib/bin.js、dsh_home 填 C:/dsh。"
+  "_comment_dsh": "【可选】深答线：Ctrl+Shift+D 时把问题交给本机 DeepSeek Harness（dsh --profile headless）带工具回答。三项必须全填才生效，填任一为空＝关闭该功能（快答线不受影响）。例：dsh_node 填 C:/node/node.exe、dsh_bin 填 C:/dsh/lib/bin.js、dsh_home 填 C:/dsh。",
+
+  "vad_end_ms": 600,
+  "_comment_vad_end_ms": "判停：静音超过这么久（毫秒）就认为「这句话说完了」。600 = 稳（默认）。调到 350~400 能让答案早约 200ms 出现，代价是语速慢、爱停顿的人会被切成两句，检索质量下降。建议先不动，觉得慢再往下调。",
+  "core_max_chars": 40,
+  "_comment_core_max_chars": "核心句超过这个字数就标黄 + 缩字号（一秒内念不完，实测这类念法合规率只有 79%）。20~60 之间调：材料句子普遍长就调大，想逼自己说短句就调小。",
+  "core_font_px": 20,
+  "_comment_core_font_px": "核心大字的基准字号（像素）。屏幕小、或想一眼扫更多字可以调小；视力吃紧调大。"
 }

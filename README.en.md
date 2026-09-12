@@ -43,7 +43,7 @@ EarShot does not answer for you. It puts **the material you prepared** in front 
 - ASR mangles proper nouns; keep `config/known_terms.md` up to date.
 - Topic carry-over on contentless follow-ups ("and what about that?") is a known weakness.
 - **Windows only** (WASAPI loopback, RegisterHotKey, SetWindowDisplayAffinity).
-- The first transcription takes 21.7 s (numba JIT warm-up); afterwards it is ~100 ms.
+- The **first** transcription costs 21.7 s (numba JIT compile). The startup path already pays this for you (`boot()` warms up explicitly), so you only hit it if you call the model outside the normal boot.
 
 ## Quick start
 

@@ -25,7 +25,7 @@ from ctypes import wintypes
 from PyQt6.QtCore import (Qt, QThread, pyqtSignal, QTimer, QPoint,
                           QAbstractNativeEventFilter)
 from PyQt6.QtGui import (QFont, QColor, QPainter, QPainterPath, QFontMetrics,
-                         QKeySequence, QShortcut)
+                         QKeySequence, QShortcut, QCursor)
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QTextEdit, QLineEdit, QPushButton, QFrame)
 
@@ -97,9 +97,33 @@ HOTKEY_ALTS = {
     2: [('Ctrl+Shift+L', ord('L'))],
 }
 
-MAX_CORE_CHARS = 40   # 核心句超过这个字数，一秒内念不完（实测这类合规率只有 79%）
-CORE_FONT_PX = 20     # 核心大字基准字号：只看核心句模式下唯一的大字
+# ── 可调手感参数：读 config/settings.json（不写就用下面的默认值）──────────
+# 复用后端那一份配置读取逻辑（server/settings.py），避免「UI 一套默认、后端另一套」。
+# 读失败（比如只拷了 ui/ 目录）不该让浮窗起不来，一律回落到默认值。
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+try:
+    if os.path.join(_REPO_ROOT, 'server') not in sys.path:
+        sys.path.insert(0, os.path.join(_REPO_ROOT, 'server'))
+    import settings as _SETTINGS
+except Exception:
+    _SETTINGS = None
+
+
+def _cfg_int(key, default):
+    """取一个整数手感参数；任何异常都退回默认值，绝不让 UI 起不来。"""
+    try:
+        v = _SETTINGS.get(key, default) if _SETTINGS is not None else default
+        return int(v) if v is not None else default
+    except Exception:
+        return default
+
+
+MAX_CORE_CHARS = _cfg_int('core_max_chars', 40)   # 核心句超过这个字数，一秒内念不完（实测这类合规率只有 79%）
+CORE_FONT_PX = _cfg_int('core_font_px', 20)       # 核心大字基准字号：只看核心句模式下唯一的大字
 CORE_FONT_MIN = 12    # 超长时字号缩小的下限
+# 浮窗与屏幕边缘的间距（右 / 上）：贴边太紧会在某些缩放比例下被边框切掉一点
+MARGIN_X = 24
+MARGIN_Y = 40
 
 
 class HotkeyFilter(QAbstractNativeEventFilter):
@@ -202,8 +226,7 @@ class Teleprompter(QWidget):
                             Qt.WindowType.WindowStaysOnTopHint |
                             Qt.WindowType.Tool)
         self.resize(580, 660)
-        scr = QApplication.primaryScreen().availableGeometry()
-        self.move(scr.right() - 610, scr.top() + 50)
+        self._place_on_cursor_screen()
         self._build_ui()
         self._apply_style()
         self._set_core('—')
@@ -231,6 +254,32 @@ class Teleprompter(QWidget):
             self.ws.start()
 
     # ── UI ──
+    def _place_on_cursor_screen(self):
+        """把浮窗放到「鼠标当前所在那块屏」的右上角，并保证整窗落在该屏可用区里。
+
+        旧实现只用 primaryScreen()：双屏时会议软件在副屏、浮窗却出现在主屏，用户以为
+        程序没起来；1366x768 这种小屏 + 150% 缩放下，right()-610 还可能算出屏外坐标。
+        这里改成跟随鼠标所在屏，并把坐标夹进可用区（可用区已排除任务栏）。
+        """
+        app = QApplication.instance()
+        scr = (app.screenAt(QCursor.pos()) if app is not None else None) or QApplication.primaryScreen()
+        if scr is None:
+            return
+        g = scr.availableGeometry()
+        w, h = self.width(), self.height()
+        x = g.left() + g.width() - w - MARGIN_X
+        y = g.top() + MARGIN_Y
+        # 夹取：窗口比屏幕还大时至少保证左上角在屏内，不做「一半飘在外面」的定位
+        x = max(g.left(), min(x, g.left() + g.width() - w))
+        y = max(g.top(), min(y, g.top() + g.height() - h))
+        self.move(x, y)
+        try:
+            print('[浮窗] 屏幕「%s」可用区 %dx%d @(%d,%d) 缩放 %.2f → 浮窗 %dx%d 定位 (%d,%d)'
+                  % (scr.name(), g.width(), g.height(), g.left(), g.top(),
+                     scr.devicePixelRatio(), w, h, x, y), flush=True)
+        except Exception:
+            pass
+
     def _build_ui(self):
         v = QVBoxLayout(self)
         v.setContentsMargins(14, 12, 14, 12)
