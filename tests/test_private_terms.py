@@ -65,3 +65,15 @@ def test_config_files_are_gitignored():
     gi = open(os.path.join(ROOT, '.gitignore'), encoding='utf-8').read()
     for f in ('config/topic_terms.json', 'config/domain_words.txt', 'config/settings.json'):
         assert f in gi, '%s 必须在 .gitignore 里' % f
+
+def test_migration_also_copies_personal_md():
+    """迁移必须连 config/*.md 个人配置一起搬。
+
+    2026-09-13 实测踩到的坑：migrate_private.py 原先只搬了 settings /
+    domain_words / topic_terms / 密钥，漏了这三个。症状很隐蔽 —— 工具照常启动，
+    只是会前补的「我会、但材料里没写」的技术全丢：preflight 第 5 项变成
+    「会 0 个」，于是把明明会的名词判成「没接触过」。
+    """
+    src = open(os.path.join(ROOT, 'tools', 'migrate_private.py'), encoding='utf-8').read()
+    for name in ('company.md', 'known_terms.md', 'never_used.md'):
+        assert name in src, '迁移脚本漏了 config/%s —— 专名词表会变成 0 个' % name

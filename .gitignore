@@ -19,6 +19,7 @@ config/api_key.txt
 config/company.md
 config/known_terms.md
 config/never_used.md
+config/terms_review.md
 # 你的私有词表（项目名、领域术语）：只属于你本机，仓库里放的是 .example 版本
 config/topic_terms.json
 config/domain_words.txt

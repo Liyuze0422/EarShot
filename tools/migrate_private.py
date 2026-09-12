@@ -90,6 +90,7 @@ def main():
             print('  config/api_key.txt        从 %s 复制一份（省得两边跑）' % keyf)
         print('  config/domain_words.txt   领域词表')
         print('  config/topic_terms.json   话题词表')
+        print('  config/*.md               个人配置：我会但材料没写的技术、绝不说的话术、公司信息')
         print('另外会建 %s\\_base\\ 并提示你把材料挪进去（不挪也能先跑，见下）。' % a.knowledge_dir)
         return 0
 
@@ -145,6 +146,22 @@ def main():
             with open(p, 'w', encoding='utf-8') as f:
                 json.dump(terms, f, ensure_ascii=False, indent=2)
             print('已写 config/topic_terms.json（%d 个项目）' % len(terms))
+
+    # ---- 个人配置 md：不搬的话「专名词表体检」会显示 0 个 ----
+    # 2026-09-13 补：原先只搬了 settings / domain_words / topic_terms / 密钥，
+    # 漏了这几个。症状很隐蔽 —— 工具照常启动，只是会前补的「我会、但材料里没写
+    # 的技术」全丢，于是把明明会的名词判成「没接触过」。
+    PERSONAL = ('company.md', 'known_terms.md', 'never_used.md', 'terms_review.md')
+    cfg_src = os.path.join(os.path.dirname(os.path.abspath(a.src)), 'config')
+    for name in PERSONAL:
+        s_ = os.path.join(cfg_src, name)
+        if not os.path.isfile(s_):
+            continue
+        d_ = os.path.join(CFG, name)
+        if not _ok(d_, a):
+            continue
+        shutil.copyfile(s_, d_)
+        print('已复制 config/%s（%d 字节）' % (name, os.path.getsize(d_)))
 
     # ---- 回归数据 + 依赖私人样本的检查脚本 ----
     # 这些也全在 .gitignore 里。不搬过来的话，迁移完 tools/regress.py 会报
