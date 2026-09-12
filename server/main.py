@@ -11,7 +11,17 @@ UI:    ws://127.0.0.1:<端口>/ws    端口写在 .runtime_port（8765 被占会
   4. 8765 被占自动顺延 —— 不再"后端静默退出、浮窗永远未连接"
   5. 会话落盘 logs/session_*.jsonl —— 面试后复盘和新测试集都从这来
 """
-import os, sys, json, time, glob, asyncio, socket, threading, queue, traceback, subprocess
+import os
+import sys
+import json
+import time
+import glob
+import asyncio
+import socket
+import threading
+import queue
+import traceback
+import subprocess
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 

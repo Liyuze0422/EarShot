@@ -11,7 +11,12 @@
   python tools/build_bank.py --smoke      # 只跑 4 个窗口，看质量
   python tools/build_bank.py              # 全量（约 40+ 次调用，6 并发）
 """
-import sys, os, re, json, time, argparse
+import sys
+import os
+import re
+import json
+import time
+import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.stdout.reconfigure(encoding='utf-8')

@@ -8,7 +8,12 @@
   2. 模型路径必须是纯 ASCII(中文路径下 sentencepiece 的 C++ 层打不开文件)
   3. 启动时必须 warmup() 预热,否则首次识别要 20+ 秒(numba JIT)
 """
-import os, sys, time, re, threading, queue
+import os
+import sys
+import time
+import re
+import threading
+import queue
 import numpy as np
 import soundcard as sc
 import soundfile as sf

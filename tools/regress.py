@@ -16,7 +16,11 @@
   python tools/regress.py           # 快（约 20 秒）
   python tools/regress.py --e2e     # 再加端到端全量回放（约 80 秒，会真调模型）
 """
-import sys, os, json, argparse, subprocess
+import sys
+import os
+import json
+import argparse
+import subprocess
 sys.stdout.reconfigure(encoding='utf-8')
 HERE = os.path.dirname(os.path.abspath(__file__)); ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, 'server'))

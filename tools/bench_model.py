@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """测首字延迟:候选模型 x 是否开思考。"""
-import sys, os, time
+import sys
+import os
+import time
 sys.stdout.reconfigure(encoding='utf-8')
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'server'))

@@ -6,7 +6,12 @@
 
 用法: python tools/e2e_live.py ["问题"]      # 默认问一个材料外的名词
 """
-import sys, os, json, time, asyncio, argparse
+import sys
+import os
+import json
+import time
+import asyncio
+import argparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)

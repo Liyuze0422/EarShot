@@ -6,7 +6,12 @@
 
 用法: python tools/judge_answers.py [结果文件]   默认 tests/e2e_replay_result.json
 """
-import sys, os, re, json, time, argparse
+import sys
+import os
+import re
+import json
+import time
+import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 sys.stdout.reconfigure(encoding='utf-8')
 HERE = os.path.dirname(os.path.abspath(__file__)); ROOT = os.path.dirname(HERE)

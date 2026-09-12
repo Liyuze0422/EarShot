@@ -17,7 +17,18 @@ r"""面试提词器 · 面试前 30 秒全链路自检 (preflight)
     transcribe() 按内部计数器写 live_0000N.wav，不重定向就会覆盖 .tmp 里的真录音。
   · 其余检查全是只读（打开设备、建内存索引、发一次请求、读文件）。
 """
-import os, sys, re, time, glob, socket, shutil, struct, ctypes, subprocess, threading, unicodedata
+import os
+import sys
+import re
+import time
+import glob
+import socket
+import shutil
+import struct
+import ctypes
+import subprocess
+import threading
+import unicodedata
 
 try:
     sys.stdout.reconfigure(encoding='utf-8')
@@ -155,7 +166,8 @@ def _model_dir():
 
 def _candidate_wavs():
     """.tmp 下的样本音频，按 RMS 从大到小排（越响越像真人说话）。"""
-    import numpy as np, soundfile as sf
+    import numpy as np
+    import soundfile as sf
     files = sorted(set(glob.glob(os.path.join(TMP_DIR, 'live_*.wav')) +
                        glob.glob(os.path.join(TMP_DIR, '*.wav'))))
     out = []
@@ -184,7 +196,8 @@ def check_asr():
         return 'FAIL', '模型目录在但没有 .onnx 权重: %s' % model_dir
 
     cands = _candidate_wavs()
-    import numpy as np, soundfile as sf
+    import numpy as np
+    import soundfile as sf
     from asr_engine import SenseVoiceASR, SR
     t0 = time.time()
     asr = SenseVoiceASR(model_dir)
@@ -260,10 +273,10 @@ def check_retrieval():
         return 'PASS', '切块 %d · 建索引 %.2fs · 查询 %.1fms · 「%s」→ top1 %s' % (
             len(chunks), build_s, q_ms, _clip(probe_q, 24), _clip(srcs[0], 40))
     if any(expect in s for s in srcs):
-        return 'WARN', '切块 %d · 建索引 %.2fs · 查询「%s」top1 是 %s，%s 掉到了第 %d 位（能答，但不准）' % (
+        return 'WARN', '切块 %d · 建索引 %.2fs · 查询 %.1fms · 「%s」top1 是 %s，%s 掉到了第 %d 位（能答，但不准）' % (
             len(chunks), build_s, q_ms, _clip(probe_q, 24), _clip(srcs[0], 30), expect,
             next(i for i, s in enumerate(srcs, 1) if expect in s))
-    return 'FAIL', '切块 %d · 建索引 %.2fs · 查询「%s」top%d 里没有 %s: %s' % (
+    return 'FAIL', '切块 %d · 建索引 %.2fs · 查询 %.1fms · 「%s」top%d 里没有 %s: %s' % (
         len(chunks), build_s, q_ms, _clip(probe_q, 24), len(srcs), expect,
         ', '.join(_clip(s, 24) for s in srcs))
 

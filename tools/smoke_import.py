@@ -4,7 +4,8 @@
 不加载 ASR 模型、不打开音频设备、不连网络，跑一次一两秒。
 用法（仓库根目录下）：python tools/smoke_import.py
 """
-import os, sys
+import os
+import sys
 sys.stdout.reconfigure(encoding='utf-8')
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'server'))

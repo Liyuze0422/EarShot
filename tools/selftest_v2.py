@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
 """端到端自测 v2：TTS 朗读已知文本 -> 回环采集 -> VAD -> SenseVoice 识别（ASCII 模型路径）"""
-import os, sys, time, subprocess, threading, re, wave
+import os
+import sys
+import time
+import subprocess
+import threading
+import re
+import wave
 sys.stdout.reconfigure(encoding='utf-8')
 import numpy as np
 import soundcard as sc
@@ -62,7 +68,9 @@ from funasr_onnx import SenseVoiceSmall
 t0 = time.time()
 m = SenseVoiceSmall(MODEL, batch_size=1, quantize=True)
 print(f'  加载耗时 {time.time()-t0:.1f}s')
-print(f'  当前进程 RSS = {os.popen("powershell -NoProfile -Command \"(Get-Process -Id " + str(os.getpid()) + ").WorkingSet64/1MB\"").read().strip()} MB')
+# 注意：这里不能在 f-string 的表达式里写反斜杠（Python 3.11 会直接 SyntaxError，3.12 才放宽），先算好再插值
+_rss = os.popen('powershell -NoProfile -Command "(Get-Process -Id %d).WorkingSet64/1MB"' % os.getpid()).read().strip()
+print(f'  当前进程 RSS = {_rss} MB')
 
 print()
 print('='*66)

@@ -13,7 +13,13 @@
   · 核心句超过 MAX_CORE_CHARS(40) 字：左侧黄线 + 黄色角标 + 字号自适应缩小，
     一眼就知道「这行太长，别照念」。
 """
-import os, sys, json, ctypes, asyncio, threading, time
+import os
+import sys
+import json
+import ctypes
+import asyncio
+import threading
+import time
 from ctypes import wintypes
 
 from PyQt6.QtCore import (Qt, QThread, pyqtSignal, QTimer, QPoint,

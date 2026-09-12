@@ -10,7 +10,12 @@
   python tools/session_report.py --file logs/session_20260911_231349.jsonl
   python tools/session_report.py --list         # 列出所有会话
 """
-import os, sys, json, glob, argparse, time
+import os
+import sys
+import json
+import glob
+import argparse
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)

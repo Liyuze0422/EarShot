@@ -7,7 +7,11 @@
 
 衡量指标: 端到端延迟(说完->出字)、单句识别耗时、进程内存峰值。
 """
-import os, sys, time, argparse, ctypes
+import os
+import sys
+import time
+import argparse
+import ctypes
 import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

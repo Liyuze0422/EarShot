@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """测:材料块大小 -> 首字延迟。用不同问题避免缓存命中，测真实冷启动。"""
-import sys, os, time, json
+import sys
+import os
+import time
+import json
 sys.stdout.reconfigure(encoding='utf-8')
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'server'))
@@ -22,7 +25,7 @@ def build_user(q, topk, cut):
     mats = []
     for sc, src, txt in hits:
         mats.append(f'<!-- {src} -->\n{txt[:cut]}')
-    return f'<材料>\n' + '\n\n---\n\n'.join(mats) + f'\n</材料>\n\n面试官提问：{q}', hits
+    return '<材料>\n' + '\n\n---\n\n'.join(mats) + f'\n</材料>\n\n面试官提问：{q}', hits
 
 def probe(q, topk, cut):
     user, hits = build_user(q, topk, cut)

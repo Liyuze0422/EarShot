@@ -13,7 +13,9 @@
 
 用法: python tools/build_terms.py
 """
-import sys, os, re
+import sys
+import os
+import re
 sys.stdout.reconfigure(encoding='utf-8')
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'server'))
@@ -50,7 +52,8 @@ def ascii_terms(texts):
 
 def cjk_terms(texts, min_freq=4):
     """材料里反复出现的名词性词（跳过通用高频词）。"""
-    import jieba, jieba.posseg as pseg
+    import jieba
+    import jieba.posseg as pseg
     from collections import Counter
     jieba.initialize()
     c = Counter()

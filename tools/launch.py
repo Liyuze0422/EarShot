@@ -11,7 +11,13 @@
   python tools/launch.py --check    # 只看现在什么状态，不起来
   python tools/launch.py --no-ui    # 只起后端（调试用）
 """
-import os, sys, time, json, argparse, subprocess, urllib.request
+import os
+import sys
+import time
+import json
+import argparse
+import subprocess
+import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)

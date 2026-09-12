@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """前后对比：核心句元描述率 / 长度 / 延迟。"""
-import sys, os, json, re, statistics
+import sys
+import os
+import json
+import re
+import statistics
 sys.stdout.reconfigure(encoding='utf-8')
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 META = re.compile(r'^我(先)?(判断|觉得|理解|猜|认为)|面试官(想|要)问|他问的是|对方想(听|问)|考的是我|我得先|先(分|搞)清')

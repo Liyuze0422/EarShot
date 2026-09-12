@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-import sys, os
+import sys
+import os
 sys.stdout.reconfigure(encoding='utf-8')
 import soundcard as sc
 print('=== 默认扬声器 ===')

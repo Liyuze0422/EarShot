@@ -7,7 +7,11 @@ r"""提取 .docx 文本（纯标准库，docx 就是 zip + xml）。
 不给参数时，在 knowledge/ 下找第一个 .docx，输出到 knowledge/<同名>.md ——
 面试录像转写、HR 发的资料常是 docx，转成 md 才能进知识库。
 """
-import sys, os, re, zipfile, glob
+import sys
+import os
+import re
+import zipfile
+import glob
 sys.stdout.reconfigure(encoding='utf-8')
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

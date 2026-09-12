@@ -6,7 +6,10 @@
   2. 按问题类型分策略 —— 经历题严格依据材料;设计题结合对方公司具体分析
   3. 设计题没有材料可依 -> 禁止编造,改为给方法论框架
 """
-import os, sys, time, re
+import os
+import sys
+import time
+import re
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import settings
 from knowledge import build, detect_topic, tok

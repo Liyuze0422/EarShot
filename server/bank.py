@@ -10,7 +10,9 @@
   1. 命中后作为高精度材料喂给快答线（口语问法 + 一条已经写好的答案）
   2. 快答线失败/断网时直接铺答案，不调模型（离线兜底）
 """
-import os, json, sys
+import os
+import json
+import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)

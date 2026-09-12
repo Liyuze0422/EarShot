@@ -33,7 +33,10 @@
      但正文里没有"项目A"这个完整串。把文件名也塞进词袋并加权。
 实测：真实提问 hit@1 15.4%→（见 tools/test_retrieval_real.py），hit@3 41%→。
 """
-import os, re, math, glob
+import os
+import re
+import math
+import glob
 from collections import Counter
 import jieba
 

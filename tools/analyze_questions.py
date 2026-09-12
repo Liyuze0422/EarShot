@@ -7,7 +7,9 @@ r"""从面试记录里提取面试官的提问，归纳题型。
 不给参数时读 knowledge/面试记录.md。原文按"发言人1 / 发言人2"开头的行分段
 （转写工具常见的格式），第 2 个发言人被当作面试官。
 """
-import sys, os, re
+import sys
+import os
+import re
 sys.stdout.reconfigure(encoding='utf-8')
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'server'))

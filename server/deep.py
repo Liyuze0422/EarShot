@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """DSH 深答线:调 `dsh --profile headless` 让 harness 本体带工具回答。"""
-import os, sys, time, subprocess
+import os
+import sys
+import time
+import subprocess
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import settings

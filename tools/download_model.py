@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """从 ModelScope 下载 SenseVoiceSmall ONNX(int8) 到 models/ 目录，纯标准库实现。"""
-import os, sys, json, urllib.request, time
+import os
+import sys
+import json
+import urllib.request
+import time
 
 REPO = 'iic/SenseVoiceSmall-onnx'
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
