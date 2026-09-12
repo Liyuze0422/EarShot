@@ -146,3 +146,29 @@ def test_private_conversation_data_is_ignored():
             leaked.append(rel)
     assert not leaked, ('这些路径没有被 .gitignore 忽略，一旦提交就是面试原文泄露：'
                         + ', '.join(leaked))
+
+
+def test_generated_artifacts_from_private_material_are_ignored():
+    """由你的材料**生成**的东西，和材料本身同级 —— 同样不能进公开仓库。
+
+    这条是事故复盘加上的：`tools/build_bank.py` 会把材料跑成 380+ 条
+    「口语问法 → 可直接照念的答案」，落在 `知识库/题库.json`。
+    它当时不在 .gitignore 里，一次 `git add -A` 就把它带上了公开仓库
+    （已强推抹掉，见 CHANGELOG 0.9.3）。**生成物比原始材料更容易被漏掉**，
+    因为原始材料你知道要藏，生成物只觉得是"跑出来的中间文件"。
+    """
+    if not os.path.isdir(os.path.join(ROOT, '.git')):
+        return
+    must_ignore = (
+        '知识库/题库.json',
+        'bank.json',
+        '另一个题库.json',
+        'server/__pycache__/bank.cpython-312.pyc',
+    )
+    leaked = []
+    for rel in must_ignore:
+        r = subprocess.run(['git', 'check-ignore', '-q', rel], cwd=ROOT,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if r.returncode != 0:
+            leaked.append(rel)
+    assert not leaked, ('这些由私人材料生成的产物没有被忽略：' + ', '.join(leaked))
