@@ -657,13 +657,80 @@ INHERIT_NEED_PREV_ANCHOR = False
 # 用 q 校验是否真的是上一题，防止乱序/重放时张冠李戴。
 _LAST_MAT = {'q': None, 'src': None, 'anchor': None}
 
+# ── 话题栈（2026-09-13）───────────────────────────────────────────────
+# 单锚点不够用：面试官会连着十几轮聊同一个项目，中间插两句别的（公司、团队规模）
+# 再绕回来，那时"上一题的材料"已经不是该项目了，单锚点就跟丢。
+# 所以改成保留最近几个"在聊的东西"，由近及远分别融合；越远权重越低（衰减），
+# 且超过 TTL 轮没再命中就忘掉 —— 否则一个早就不聊的项目会被反复拉进来。
+TOPIC_STACK_MAX = 3         # 最多记几个话题
+TOPIC_STACK_TTL = 8         # 超过这么多轮没再命中就出栈
+INHERIT_DECAY = 0.6         # 每远一格，权重乘以这个数
+
+_TOPIC_STACK = []           # [{'src': 文件名, 'at': 轮次, 'q': 那题原文}]
+_TURN = [0]
+
+
+def reset_topic_stack():
+    """开新的一场（或切资料包）时清空。"""
+    _TOPIC_STACK[:] = []
+    _TURN[0] = 0
+    _LAST_MAT.update({'q': None, 'src': None, 'anchor': None})
+
+
+def _stack_push(src, question):
+    _TURN[0] += 1
+    if not src:
+        return
+    st = _TOPIC_STACK
+    if st and st[-1]['src'] == src:
+        st[-1]['at'], st[-1]['q'] = _TURN[0], question
+    else:
+        st.append({'src': src, 'at': _TURN[0], 'q': question})
+        del st[:-TOPIC_STACK_MAX]
+    while st and _TURN[0] - st[0]['at'] > TOPIC_STACK_TTL:
+        st.pop(0)
+
+
+def _stack_anchors(history):
+    """由近及远返回 [(文件名, 权重)]，只保留还在最近上下文里的话题。
+
+    逐个用 history 校验：不在最近这几句里的就别继承 —— 乱序、重放、
+    或者用户手动往回翻的时候，栈里可能留着不相干的旧话题。
+    """
+    hist = {h.strip() for h in (history or []) if h}
+    out = []
+    for i, e in enumerate(reversed(_TOPIC_STACK)):
+        if HR_HINT.search(e['q'] or ''):
+            continue                    # HR 题不向后传递，免得把后面的题带进 HR 材料
+        if hist and (e['q'] or '').strip() not in hist:
+            continue
+        out.append((e['src'], INHERIT_DECAY ** i))
+    return out
+
 
 def _rrf_merge(a, b, w_b=None, k=None):
-    """两路 [(score, src, text)] 按 RRF 融合，a 是主路（权重 1.0）。"""
+    """两路 [(score, src, text)] 按 RRF 融合，a 是主路（权重 1.0）。
+
+    b 也可以传 [(列表, 权重), ...] 一次融合多路（话题栈要用）——
+    逐个串行融合会让靠后的路被重复计入，所以必须一次算完。
+    """
+    if b and isinstance(b[0], tuple):
+        return _rrf_merge_many(a, b, k=k)
     w_b = INHERIT_WEIGHT if w_b is None else w_b
     k = getattr(knowledge, 'RRF_K', 60) if k is None else k
     agg = {}
     for w, lst in ((1.0, a), (w_b, b)):
+        for rank, item in enumerate(lst):
+            e = agg.setdefault(item[2], [0.0, item[1]])
+            e[0] += w / (k + rank)
+    return [(v[0], v[1], key) for key, v in sorted(agg.items(), key=lambda kv: -kv[1][0])]
+
+
+def _rrf_merge_many(a, others, k=None):
+    """主路 a（权重 1.0）+ 若干旁路 [(列表, 权重)] 一次性 RRF 融合。"""
+    k = getattr(knowledge, 'RRF_K', 60) if k is None else k
+    agg = {}
+    for w, lst in [(1.0, a)] + [(float(w), lst) for lst, w in others]:
         for rank, item in enumerate(lst):
             e = agg.setdefault(item[2], [0.0, item[1]])
             e[0] += w / (k + rank)
@@ -708,17 +775,22 @@ def retrieve(question, topk=DEFAULT_TOPK, history=None):
     topic = detect_topic_sticky(question, hist, sources=sources)
     hits = idx.search(q, topk=topk, boost_src=topic, boost=STICKY_BOOST if topic else None)
 
-    # 指代型追问：本句没有话题词、又短、又不是 HR 题 -> 把上一题的材料一起拉进来
+    # 指代型追问：本句没有话题词、又短、又不是 HR 题 -> 把最近聊过的材料一起拉进来
     if (INHERIT_ENABLE and detect_topic(question) is None
             and not HR_HINT.search(question or '')
             and len(question or '') <= INHERIT_GATE_CHARS and hist):
-        anc = _prev_material(idx, question, hist)
-        if anc:
-            hits = _rrf_merge(hits, idx.search(q, topk=topk, boost_src=anc,
-                                               boost=INHERIT_BOOST))[:topk]
+        anchors = _stack_anchors(hist)
+        if not anchors:                      # 冷启动/重放：栈还空着，退回单锚点反推
+            anc = _prev_material(idx, question, hist)
+            anchors = [(anc, 1.0)] if anc else []
+        if anchors:
+            others = [(idx.search(q, topk=topk, boost_src=src, boost=INHERIT_BOOST),
+                       w * INHERIT_WEIGHT) for src, w in anchors]
+            hits = _rrf_merge(hits, others)[:topk]
 
     _LAST_MAT['q'], _LAST_MAT['anchor'] = question, topic
     _LAST_MAT['src'] = hits[0][1] if hits else None
+    _stack_push(_LAST_MAT['src'], question)
 
     mats = []
     for sc, src, txt in hits:
