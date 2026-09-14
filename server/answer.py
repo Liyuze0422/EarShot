@@ -354,6 +354,16 @@ def known_terms():
     return _KNOWN
 
 
+def reset_cache():
+    """清掉随语料变化的缓存。
+
+    切资料包必须调 —— _VOCAB / _FUZZ 是模块级 memo，不清的话换了 knowledge/
+    内容之后还会拿旧词表做纠错和缺口判定（termfix 也依赖它们）。
+    """
+    global _VOCAB, _FREQ, _FUZZ
+    _VOCAB = _FREQ = _FUZZ = None
+
+
 def _vocab():
     global _VOCAB, _FREQ
     if _VOCAB is None:

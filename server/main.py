@@ -12,6 +12,7 @@ UI:    ws://127.0.0.1:<端口>/ws    端口写在 .runtime_port（8765 被占会
   5. 会话落盘 logs/session_*.jsonl —— 面试后复盘和新测试集都从这来
 """
 import os
+import re
 import sys
 import json
 import time
@@ -22,6 +23,8 @@ import threading
 import queue
 import traceback
 import subprocess
+
+import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -43,6 +46,82 @@ PORT_FILE = os.path.join(ROOT, '.runtime_port')    # UI 读它拿端口
 LOG_DIR = os.path.join(ROOT, 'logs')
 TMP_DIR = os.path.join(ROOT, '.tmp')
 DEVICE_CHECK_S = 5.0        # 每 5 秒看一眼默认播放设备有没有变
+MAX_MERGE_S = 30.0          # 拼接后的音频上限：一句话再长也不该拖过 30 秒
+
+# ── 半句判定 ────────────────────────────────────────────────────────────
+# 面试官常这样说："那你这个项目 …… 对吧，但是我想知道的是" —— 中间换气就够判停。
+# 旧版拿前半句直接发答案，第二段来了再顶掉一次，屏幕上的答案就在乱闪。
+# 宁可少判（判错只是晚一轮），也别把完整问题扣住不发。
+_HALF_TAIL = re.compile(
+    r'(然后|但是|但|因为|所以|如果|假如|而且|不过|就是|那个|这个|以及|还有|或者|还是'
+    r'|不像|关于|对于|为了|按照|根据|我们|你们|他们|我|你|他|她|的|是|和|跟|对|把|在'
+    r'|有|会|能|要|想|说|讲|做|用|给|让|被|从|到|就|都|也|还|再|很|挺|比较)$')
+_Q_MARK = re.compile(
+    r'[？?]|吗|呢|什么|怎么|为啥|为什么|如何|哪|多少|几(个|种|台|层|条|套|步|次|年|家)'
+    r'|是不是|有没有|会不会|能不能|对不对|介绍一下|讲讲|说说|聊一聊|谈一谈|做过|用过|接触过')
+
+
+class MergeGate:
+    """把 VAD 切出的一段段音频，按"面试官到底说完了没"合并成一次识别。
+
+    为什么需要它：面试官句内换气、想一下再说下半句，常常超过 vad_end_ms。
+    旧版一判停就发答案，第二段来了又发一次并把上一个顶掉 —— 用户看到的就是
+    "答案乱变"。这里让判停后先攒着，窗口内只要又出声就取消待发，等它说完
+    拼成一句再送。
+
+    抽成纯逻辑类是为了能单测：采集循环要真实音频设备，测不了。
+    """
+
+    def __init__(self, merge_s=0.6, max_s=MAX_MERGE_S, sr=SR):
+        self.merge_s = max(0.0, merge_s)
+        self.max_s = max_s
+        self.sr = sr
+        self.pending = None
+        self.deadline = None
+        self.n_merged = 0
+
+    def feed(self, st, audio, now):
+        """喂一个 VAD 事件。返回"该送识别"的音频（numpy 数组），否则 None。
+
+        st: 'end' = 判停；'speech' = 正在说；'idle' = 静音/没人说话。
+        """
+        if st == 'speech' and self.pending is not None:
+            # 又出声了 → 上句没说完。用 inf 而不是 None：None 表示"没有窗口，
+            # 立刻发"，会正好触发我们想避免的行为（单测抓到过）。
+            self.deadline = float('inf')
+        elif st == 'end':
+            if self.pending is None:
+                self.pending = audio
+            else:
+                gap = np.zeros(int(self.sr * 0.2), dtype='float32')
+                self.pending = np.concatenate([self.pending, gap, audio])
+                self.n_merged += 1
+            self.deadline = (now + self.merge_s) if self.merge_s > 0 else None
+
+        if self.pending is None:
+            return None
+        if (self.deadline is not None and now < self.deadline
+                and len(self.pending) / self.sr < self.max_s):
+            return None
+        out, self.pending, self.deadline = self.pending, None, None
+        return out
+
+    def reset(self):
+        self.pending, self.deadline = None, None
+
+
+def _is_half_sentence(txt):
+    """这句看着说完了吗？判据保守：够长、或带了疑问标志/句末标点，就算说完了。"""
+    t = (txt or '').strip()
+    if not t:
+        return True
+    if len(t) >= 40:                        # 够长就当说完，别让用户干等
+        return False
+    if _Q_MARK.search(t):                   # 已经问到点子上了
+        return False
+    if re.search(r'[。！？!?；;…]$', t):      # 有句末标点
+        return False
+    return bool(_HALF_TAIL.search(t)) or len(t) < 12
 KEEP_WAV = 20               # .tmp 里只留最近 20 段录音
 DEEP_TIMEOUT = 90           # 原 240s:面试里没人等得起 4 分钟
 CAPTURE_BACKOFF_INIT = 1.0  # 采集重连退避起点（秒）—— 故障注入测试会把它调小
@@ -315,10 +394,22 @@ def capture_once(vad_thresh):
     STATE['listening'] = True
     emit({'type': 'status', 'stage': 'listening', 'device': cap.device_name,
           'vadThresh': round(vad_thresh, 4), 'restarts': STATE['audio_restarts']})
+    # ── 合并窗口 ─────────────────────────────────────────────────────────
+    # 面试官句内换气、想一下再说下半句，常常超过 vad_end_ms。旧版一判停就发答案，
+    # 第二段来了又发一次并把上一个顶掉 —— 用户看到的就是"答案乱变"。
+    # 现在：判停后先攒着，merge_s 内只要又出声就取消待发，等它说完拼成一句再送。
+    merge_s = max(0.0, int(settings.get('vad_merge_ms', 600) or 0) / 1000.0)
+    hold_on = bool(settings.get('hold_incomplete', True))
+    max_hold_s = float(settings.get('max_hold_s', 4.0) or 4.0)
+    if merge_s or hold_on:
+        emit({'type': 'status', 'stage': 'merge_window',
+              'mergeMs': int(merge_s * 1000), 'holdIncomplete': hold_on})
+    gate = MergeGate(merge_s=merge_s)
+    hold = {'text': '', 'at': 0.0}   # 文本层的"半句"暂存
+
     last_level = 0.0
     last_dev = time.time()
     for block in cap.frames():
-        import numpy as np
         now = time.time()
         if now - last_dev > DEVICE_CHECK_S:
             last_dev = now
@@ -331,22 +422,56 @@ def capture_once(vad_thresh):
             last_level = now
         if STATE['paused']:
             vad.reset()
+            gate.reset()
             continue
+
         st, audio = vad.feed(block)
-        if st == 'end':
-            dur = len(audio) / SR
-            t0 = time.time()
-            txt, dt = asr.transcribe(audio)
-            if not txt.strip():
-                continue
-            try:
-                from extract_q import extract
-                txt = extract(txt)
-            except Exception:
-                pass
+        audio = gate.feed(st, audio, now)      # 合并窗口：没说完就返回 None
+
+        # 半句存太久了：别再等，直接发（否则用户会觉得"我说了它没反应"）
+        if hold['text'] and now - hold['at'] > max_hold_s:
+            t, hold['text'] = hold['text'], ''
+            emit({'type': 'asr', 'text': t, 'held': False, 'forced': True})
+            ask(t)
+
+        if audio is None:
+            continue
+        dur = len(audio) / SR
+        t0 = time.time()
+        txt, dt = asr.transcribe(audio)
+        if not txt.strip():
+            continue
+        # 术语纠错要放在 extract() 之前 —— 纠正后的文本才该进上屏、检索和
+        # "没准备过"的判定。实测英文术语识别率 35.7% -> 54.3%（35 术语 × 2 臂）。
+        try:
+            from termfix import correct as _fix_terms
+            txt, _fx = _fix_terms(txt)
+            if _fx:
+                emit({'type': 'termfix', 'fixes': [[a, b] for a, b in _fx]})
+        except Exception:
+            pass
+        try:
+            from extract_q import extract
+            txt = extract(txt)
+        except Exception:
+            pass
+
+        if hold['text']:
+            # 上一段是半句 → 拼起来当一句
+            txt = hold['text'] + txt
+        if hold_on and _is_half_sentence(txt):
+            hold['text'] = txt
+            if not hold.get('at'):
+                hold['at'] = now
             emit({'type': 'asr', 'text': txt, 'dur': round(dur, 2),
-                  'asrMs': round(dt * 1000), 'latencyMs': round((time.time() - t0 + dt) * 1000)})
-            ask(txt)
+                  'asrMs': round(dt * 1000), 'held': True, 'merged': gate.n_merged,
+                  'latencyMs': round((time.time() - t0 + dt) * 1000)})
+            continue
+        hold['text'], hold['at'] = '', 0.0
+        emit({'type': 'asr', 'text': txt, 'dur': round(dur, 2),
+              'asrMs': round(dt * 1000), 'held': False, 'merged': gate.n_merged,
+              'latencyMs': round((time.time() - t0 + dt) * 1000)})
+        ask(txt)
 
 
 def capture_forever():

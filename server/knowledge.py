@@ -75,6 +75,18 @@ def set_profile(name):
     global _runtime_profile
     _runtime_profile = _UNSET if name is None else str(name).strip()
     _cache.clear()
+    # 词表/纠错缓存也要清：它们是从语料派生的，不清就会拿着上个资料包的词
+    # 做术语纠错和缺口判定。
+    try:
+        import answer
+        answer.reset_cache()
+    except Exception:
+        pass
+    try:
+        import termfix
+        termfix.reset_cache()
+    except Exception:
+        pass
     return active_profile()
 
 
