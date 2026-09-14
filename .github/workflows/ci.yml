@@ -31,8 +31,6 @@ jobs:
         run: |
           python -m pip install "numpy>=1.26.4" "jieba>=0.42.1" "soundfile>=0.14.0" \
                               "soundcard>=0.4.6" "fastapi>=0.141.1" "uvicorn>=0.51.0"
-      - name: 系统依赖（Linux 下 soundcard 需要 libpulse）
-        run: sudo apt-get install -y libpulse0
       - name: 语法编译（server / ui / tools）
         run: python -m compileall -q server ui tools
       - name: Ruff 静态检查
