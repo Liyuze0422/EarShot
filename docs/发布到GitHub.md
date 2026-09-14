@@ -108,6 +108,21 @@ git commit -m "docs: 初始 Wiki（安装 / 使用 / 配置 / 原理 / 排障 / 
 git push
 ```
 
+> **两个踩过的坑**（第一次推 Wiki 必踩）：
+>
+> 1. **Wiki 是独立仓库，clone 出来没有你的 git 身份** —— `git commit` 会直接报
+>    `Author identity unknown`。先在这个 clone 里配一次（只对它生效，不动全局）：
+>
+>    ```powershell
+>    git config user.name "你的名字"
+>    git config user.email "你的邮箱"
+>    ```
+>
+> 2. **Wiki 仓库的默认分支是 `master`，不是 `main`** —— 推的时候写 `git push origin master`。
+>    不确定就先跑 `git rev-parse --abbrev-ref HEAD` 看当前分支名。
+>
+> 推完核对：`git log --oneline -1`，再回仓库 Wiki 标签刷新看一眼。
+
 **第 3 步：检查**
 
 回到仓库 → Wiki 标签，应该能看到带侧边栏的多页文档。
