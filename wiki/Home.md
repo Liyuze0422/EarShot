@@ -5,13 +5,12 @@
 
 ![preview](images/preview.png)
 
-> 截图由 `python ui/app.py --selftest` 自动生成（虚构示例，不含真实面试内容）。
-> 图片由 `scripts/sync_wiki.ps1` 一并拷进 `wiki/images/`，推送 Wiki 时一起带上去。
+> 截图用 `python ui/app.py --selftest` 生成，虚构示例，不含任何真实面试内容。
 
 ## 三分钟上手
 
 ```powershell
-git clone https://github.com/<你的用户名>/EarShot.git C:\dev\EarShot   # 必须纯英文路径
+git clone https://github.com/Liyuze0422/EarShot.git C:\dev\EarShot     # 必须纯英文路径
 cd C:\dev\EarShot
 python -m venv .venv ; .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -41,7 +40,7 @@ python tools\launch.py                    # 起后端 + 浮窗
 | [[架构与原理]] | 想知道每个模块为什么这么设计 |
 | [[性能实测]] | 想看实测数字与「哪些没验证过」 |
 | [[故障排查]] | 抓不到声音、答案不出来、浮窗没反应 |
-| [[常见问题]] | 联网、费用、隐私、合规、平台 |
+| [[常见问题FAQ]] | 联网、费用、隐私、合规、平台 |
 | [[隐私与安全]] | 数据流、密钥、防共享的边界、使用伦理 |
 | [[扩展与二次开发]] | 换 ASR、换模型、接自己的深答线 |
 
@@ -56,6 +55,7 @@ python tools\launch.py                    # 起后端 + 浮窗
 | 答案首字 | 281~831 ms |
 | 答案总耗时 | 0.91~1.58 s |
 | **端到端（说完 → 上屏）** | **约 1.3~1.5 秒** |
+| **整场回放：18 个问题答出几个** | **18 / 18，采集中断 0 次** |
 
 ## 全局热键
 

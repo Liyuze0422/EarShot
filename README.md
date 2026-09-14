@@ -12,6 +12,8 @@
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)
 ![Status](https://img.shields.io/badge/status-beta-orange.svg)
 
+📖 **[完整文档在 Wiki](https://github.com/Liyuze0422/EarShot/wiki)** —— 安装教程 · 使用说明书 · 配置手册 · 故障排查 · 架构与原理 · 性能实测
+
 <img src="docs/images/preview.png" width="700" alt="EarShot 浮窗：默认只看核心句，核心句超过 40 字会给黄色警示" />
 
 <sub>↑ 真实的浮窗截图，内容由 `python ui/app.py --selftest` 自动生成（虚构示例，不含任何真实面试内容）</sub>
