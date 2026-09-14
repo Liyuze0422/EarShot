@@ -612,7 +612,7 @@ class Teleprompter(QWidget):
         elif t == 'deep_start':
             self._deep_ready = True
             self.set_expanded(True)      # 深答内容得看得见，自动展开
-            self.deep.setPlainText('深度思考中…（约 30 秒）')
+            self.deep.setPlainText('深度思考中…（实测约 40 秒，其中 11 秒是启动开销）')
         elif t == 'deep_done':
             self._deep_ready = True
             self.set_expanded(True)
