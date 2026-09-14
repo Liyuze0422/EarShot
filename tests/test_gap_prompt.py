@@ -48,6 +48,40 @@ def test_gap_expand_section_only_expands_my_own_work():
     assert '不许编"我踩过的坑"' in s
 
 
+def test_load_list_ignores_prose_and_code_blocks(tmp_path):
+    """说明文字和示例命令不许混进词表。
+
+    实测（2026-09-14，模拟新用户 clone 后跑 preflight）：never_used.example.md 里
+    "怎么挑词"那几段说明被拆成了 58 个词条，其中一个是 python ——
+    任何人问"python 你熟吗"都会被判成"我没做过"。
+    """
+    p = tmp_path / 'x.md'
+    p.write_text(
+        '# 标题\n\n'
+        '> 引用里的说明文字，不该进词表。\n\n'
+        '- 列表项也不该进\n\n'
+        '| 表格 | 也不该进 |\n\n'
+        '```powershell\n'
+        'python tools\\preflight.py\n'
+        '```\n\n'
+        'kubernetes\n'
+        '联邦学习\n',
+        encoding='utf-8')
+    got = answer._load_list(str(p))
+    assert 'kubernetes' in got and '联邦学习' in got, got
+    assert 'python' not in got, got
+    assert 'preflight.py' not in got and 'tools\\preflight.py' not in got, got
+    assert not [w for w in got if '。' in w or '，' in w], got
+
+
+def test_shipped_example_file_is_clean():
+    """仓库里那份模板自己必须是干净的 —— 新用户 clone 下来直接读的就是它。"""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    p = os.path.join(root, 'config', 'never_used.example.md')
+    got = answer._load_list(p)
+    assert got == set(), '模板里混进了词条：%s' % sorted(got)
+
+
 def test_gap_anchor_query_is_defined():
     """gap 题会额外检索一次，把"缺口题怎么答 / 技术选型"的材料固定召回来。"""
     assert answer.GAP_ANCHOR_Q.strip()

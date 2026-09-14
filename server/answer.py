@@ -330,23 +330,41 @@ _KNOWN = None
 _NEVER = None
 
 
-def _load_list(path):
-    """读一份词表：一行一个（空格/逗号/顿号也能分隔）。
+# 说明文字的判据：中文句读、书名号/引号/括号，或者长到不像一个技术词。
+# 实测（2026-09-14，模拟新用户 clone + 跑 preflight）：never_used.example.md 里
+# 那几段"怎么挑词"的说明被拆成了 **58 个词条**，其中一个是 `python` ——
+# 任何人问"python 你熟吗"都会被判成"我没做过"。下面三道闸门一起挡。
+_BAD_WORD = re.compile(r'[。；：？！""''（）「」《》…—]')
+_SEP = re.compile(r'[\s,，、/|*`]+')
 
-    跳过 # 注释和 markdown 的 > |-* 说明行 —— 否则文件开头的说明文字会被
-    当成词条吃进来（实测：never_used.md 的说明行把 "tools/build_terms.py"
-    变成了"我其实没做过"的一个词）。
+
+def _load_list(path):
+    r"""读一份词表：一行一个（空格/逗号/顿号也能分隔）。
+
+    三道闸门，都是为了不让"说明文字"混进词表：
+    1. `#` 注释、markdown 的 `>` `-` `*` `|` 开头的行，整行跳过；
+    2. **成对反引号围起来的代码块整段跳过** —— 说明里的示例命令（`python tools\...`）
+       否则会把 `python` 这种词喂进判据；
+    3. 单个词条里出现中文句读/括号引号，或者长度超过 16 —— 那是在写句子，不是在写词表。
     """
     s = set()
-    if os.path.exists(path):
-        for line in open(path, encoding='utf-8'):
-            line = line.split('#')[0].strip()
-            if not line or line[0] in '>-*|':
+    if not os.path.exists(path):
+        return s
+    in_code = False
+    for line in open(path, encoding='utf-8'):
+        if line.strip().startswith('```'):
+            in_code = not in_code
+            continue
+        if in_code:
+            continue
+        line = line.split('#')[0].strip()
+        if not line or line[0] in '>-*|':
+            continue
+        for w in _SEP.split(line):
+            w = w.strip().lower()
+            if len(w) < 2 or len(w) > 16 or _BAD_WORD.search(w):
                 continue
-            for w in re.split(r'[\s,，、/|*`]+', line):
-                w = w.strip().lower()
-                if len(w) >= 2:
-                    s.add(w)
+            s.add(w)
     return s
 
 
