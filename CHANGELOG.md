@@ -2,6 +2,82 @@
 
 本文件记录对外可感知的变化。版本号遵循「主版本.次版本.修订号」。
 
+## 0.9.12
+
+**修一个「每个新用户都会看到」的误报：模型下完了却说还缺文件。**
+
+### 怎么发现的
+
+为回答「别人照教程能不能搭成我这样」，在一个全新目录里完整走了一遍一键安装
+（`scripts/setup.ps1`），最后一步下载模型时打出：
+
+```
+目录内容:
+        0.0 MB  am.mvn
+        0.4 MB  chn_jpn_yue_eng_ko_spectok.bpe.model
+        0.0 MB  config.yaml
+        0.0 MB  configuration.json
+      230.0 MB  model_quant.onnx
+        0.3 MB  tokens.json
+
+[!] 还缺 1 个文件: configuration.json
+```
+
+**退出码 1** —— 而那个文件明明就在，56 字节，内容也对。
+
+### 根因
+
+`tools/download_model.py` 收尾核对用的是**一个写死的统一阈值**：
+
+```python
+missing = [f for f in need if not os.path.exists(...) or os.path.getsize(...) < 1000]
+```
+
+而 `configuration.json` **本身就只有 56 字节**（`{"framework":"Pytorch","task":"auto-speech-recognition"}`）——
+**永远小于 1000，永远被判「缺」**。
+
+### 影响
+
+**每一个下载成功的用户都会看到这条「还缺文件」、并拿到退出码 1**，以为是自己装坏了；
+`setup.ps1` 也会把这次安装记成失败。而 `model_quant.onnx` 那 230MB 是好的。
+
+### 修法
+
+改成**按文件各自的实测大小设阈值**（统一阈值对小文件天然不适用）：
+
+| 文件 | 实测大小 | 现在的阈值 |
+|---|---|---|
+| `model_quant.onnx` | 230 MB | 100 MB |
+| `tokens.json` | 352 KB | 100 KB |
+| `chn_jpn_yue_eng_ko_spectok.bpe.model` | 377 KB | 100 KB |
+| `am.mvn` | 11 KB | 4 KB |
+| `config.yaml` | 1855 B | 500 B |
+| `configuration.json` | 56 B | 10 B |
+
+阈值按实测值打对折：既能挡住「下到一半断了」，又不会误报。
+
+### 验证
+
+| 检查 | 修前 | 修后 |
+|---|---|---|
+| `download_model.py` 收尾输出 | `[!] 还缺 1 个文件` / 退出码 1 | **`6 个文件齐全` / 退出码 0** |
+| 全新环境完整自检（带模型，32.1s） | 模型项 FAIL | **PASS 7 / FAIL 1**（唯一 FAIL 是没填密钥，正常） |
+
+新增 `tests/test_download_model.py`：断言每个阈值都小于真实文件大小、
+最小的那个文件绝不能用 KB 级阈值判。
+
+### 诚实边界
+
+- 阈值是**实测值打对折**，不是官方规格。ModelScope 上模型版本更新后文件大小若变了，
+  阈值该跟着调 —— 测试里那张 `REAL` 表就是基准。
+- 全量自检 32.1 秒（含 ASR 加载 + 首次识别 + 浮窗启动），比 `--fast` 的 6 秒慢；
+  面试前 30 分钟那次用 `--fast` 就够。
+
+### 可回滚
+
+```powershell
+git checkout -- tools/download_model.py tests/test_download_model.py
+```
 ## 0.9.11
 
 **修一个自己写文档踩出来的坑：说明文字被当成词表读进去了。**

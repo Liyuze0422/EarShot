@@ -10,6 +10,20 @@ REPO = 'iic/SenseVoiceSmall-onnx'
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEST = os.path.join(ROOT, 'models', 'SenseVoiceSmall-onnx')
 FILES = ['model_quant.onnx', 'tokens.json', 'am.mvn', 'config.yaml', 'configuration.json']
+# 每个文件的最小合理字节数 —— 收尾核对用。
+# ⚠️ 这里**绝不能**用一个统一阈值：早先用的是"小于 1000 字节就算没下全"，
+# 而 configuration.json 本身就只有 56 字节（{"framework":"Pytorch",...}），
+# 于是**每个下载成功的用户都会看到「还缺 1 个文件: configuration.json」并拿到退出码 1**
+# —— 文件明明是好的。（实测：model_quant.onnx 230MB / tokens.json 352KB / am.mvn 11KB /
+# config.yaml 1855B / configuration.json 56B / bpe.model 377KB。）
+# 阈值按各文件实测值打对折，既能挡住"下到一半断了"，又不会误报。
+MIN_BYTES = {
+    'model_quant.onnx': 100 << 20,
+    'tokens.json': 100 << 10,
+    'am.mvn': 4 << 10,
+    'config.yaml': 500,
+    'configuration.json': 10,
+}
 # 第 6 个文件是分词模型，它不在 onnx 仓库里，少了这个文件 funasr_onnx 建模型时会直接失败，
 # 而 Python 侧 os.path.exists 看上去一切正常 —— 所以单独从一个仓库补。
 BPE_REPO = 'iic/SenseVoiceSmall'
@@ -51,8 +65,10 @@ if __name__ == '__main__':
 
     # 收尾必须核对 6 个文件都在 —— 少一个都会在"加载模型"那一步才炸，那时人已经坐在会议室里了
     need = FILES + [BPE_FILE]
+    lo = dict(MIN_BYTES)
+    lo[BPE_FILE] = 100 << 10
     missing = [f for f in need if not os.path.exists(os.path.join(DEST, f))
-               or os.path.getsize(os.path.join(DEST, f)) < 1000]
+               or os.path.getsize(os.path.join(DEST, f)) < lo.get(f, 1)]
     print('目录内容:')
     for f in sorted(os.listdir(DEST)):
         print(f'   {os.path.getsize(os.path.join(DEST,f))/2**20:8.1f} MB  {f}')
