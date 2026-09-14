@@ -18,6 +18,8 @@ import numpy as np
 import soundcard as sc
 import soundfile as sf
 
+import settings                      # asr_textnorm 可配，见 transcribe()
+
 SR = 16000
 BLOCK_MS = 20
 BLOCK = SR * BLOCK_MS // 1000
@@ -150,7 +152,13 @@ class SenseVoiceASR:
         wav = os.path.abspath(os.path.join(self._tmp, f'live_{self._n:05d}.wav'))
         sf.write(wav, audio.astype(np.float32), sr)
         t0 = time.time()
-        res = self.model([wav])
+        # textnorm 默认 woitn（不归一化）→ 实测真实面试录音 150 秒产出 **0 个标点**，
+        # 而 extract_q.extract() 整句切分就是靠标点，于是那个模块在生产里等于没工作，
+        # 面试官 100+ 字的铺垫+自述+提问整坨进了 router 和检索。
+        # withitn 实测：同一段录音 46 个标点（句末 20）、中英混句里的英文术语
+        # 识别率 20%→40%、中文数字变阿拉伯数字（检索更稳）。
+        # 代价：偶有 "1秒。5。" 这种多余断句。要回退就把 asr_textnorm 设成 woitn。
+        res = self.model([wav], textnorm=settings.get('asr_textnorm', 'withitn') or 'woitn')
         dt = time.time() - t0
         txt = res[0] if isinstance(res, list) else str(res)
         return self._clean(txt), dt
