@@ -15,6 +15,10 @@ models/
 
 # ── 只属于你本机的配置：绝对不要提交 ──────────────────────────
 config/settings.json
+# 备份/临时变体也要挡：写配置的脚本容易留下 .bak，
+# 它和 settings.json 内容一样（含本机路径），漏一个就是隐私事故。
+config/settings.json*
+config/*.bak
 config/api_key.txt
 config/company.md
 config/known_terms.md

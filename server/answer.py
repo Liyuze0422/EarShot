@@ -496,7 +496,15 @@ def unknown_terms(question):
 
 
 def is_unknown_gap(question, topic_ok=None):
-    """面试官问的是一块我材料里没有的东西 —— 必须走"坦诚 + 不编经历"策略。"""
+    """面试官问的是一块我材料里没有的东西 —— 必须走"坦诚 + 不编经历"策略。
+
+    试过并否掉的方案：加"检索覆盖率够高就不判 gap"的守卫。
+    实测方向是错的 —— 覆盖率算的是"问题的内容词在材料里出现多少"，
+    而真正该报 gap 的题（eBPF/ClickHouse/湖仓一体）覆盖率本来就低；
+    反过来 2026-09-14 那次误判的题覆盖率只有 0.25，根本拦不住。
+    结果是该报的被压掉、该拦的没拦住，test_gap_fp 从 10/10 掉到 6/10。
+    正确的修法在 unknown_cjk 里：过滤掉 ASR 结巴造出来的假名词。
+    """
     q = question or ''
     miss = unknown_terms(q) + unknown_cjk(q) + never_hit(q)
     if not miss:
@@ -507,6 +515,11 @@ def is_unknown_gap(question, topic_ok=None):
 
 
 _CJK = re.compile(r'[\u4e00-\u9fff]{3,12}')
+# ASR 结巴：转写会把同一个字重复一次。2026-09-14 的真实误判 ——
+# 面试官说"自然语言调度，这个调度具体是怎么实现的"，转写成了"调度具具体"，
+# pseg 切成 调度(n)+具具(v)，而"具具"是个 jieba 不认识的叠字，
+# 于是"调度具具"被当成面试官嘴里的生造技术名词 → 判 gap → 回答"我没接触过"。
+_CJK_REPEAT = re.compile(r'([\u4e00-\u9fff])\1')
 _JIEBA_FREQ = None
 # 只要成分里出现虚词，拼出来的东西就一律不算"专名"（否则"双塔你""这块怎么"都能中）。
 # 用黑名单而不是白名单：白名单会误杀"存算分离"(分离/v)、"具身智能"(具身/vn) 这类真专名。
@@ -560,8 +573,14 @@ def unknown_cjk(question, max_len=8):
                     continue
                 if any(f[0] in _POS_BAD for _, f in part):
                     continue
-                if any(len(w) >= 2 and w not in jf for w, _ in part):
-                    out.append(cand)
+                bad = [w for w, _ in part if len(w) >= 2 and w not in jf]
+                if not bad:
+                    continue
+                # 不认识的成分如果**全是叠字**，那是转写结巴，不是生造词。
+                # 这条要窄：湖仓一体/存算分离/具身智能 里的 湖仓/存算/具身 都不是叠字。
+                if all(_CJK_REPEAT.search(w) for w in bad):
+                    continue
+                out.append(cand)
     keep = []
     for c in sorted(set(out), key=len, reverse=True):   # 长的优先，短的是它的子串就丢掉
         if not any(c != k and c in k for k in keep):
