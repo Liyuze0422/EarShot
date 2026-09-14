@@ -25,9 +25,10 @@ from ctypes import wintypes
 from PyQt6.QtCore import (Qt, QThread, pyqtSignal, QTimer, QPoint,
                           QAbstractNativeEventFilter)
 from PyQt6.QtGui import (QFont, QColor, QPainter, QPainterPath, QFontMetrics,
-                         QKeySequence, QShortcut, QCursor)
+                         QKeySequence, QShortcut, QCursor, QIcon, QPixmap)
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
-                             QLabel, QTextEdit, QLineEdit, QPushButton, QFrame)
+                             QLabel, QTextEdit, QLineEdit, QPushButton, QFrame,
+                             QSizeGrip, QSystemTrayIcon, QMenu)
 
 WS_URL = 'ws://127.0.0.1:8765/ws'
 # 后端 8765 被占时会自动顺延，并把实际端口写在这里。UI 每次重连都重新读一遍，
@@ -84,6 +85,8 @@ HOTKEYS = [
     (2, ord('P'), 'Ctrl+Shift+P', 'toggle_pause',      '暂停 / 恢复转写'),
     (3, ord('D'), 'Ctrl+Shift+D', 'run_deep',          '深度回答'),
     (4, ord('E'), 'Ctrl+Shift+E', 'toggle_expand',     '展开 / 收起'),
+    (5, 0x25, 'Ctrl+Shift+←', 'hist_prev',         '上一条（翻历史）'),
+    (6, 0x27, 'Ctrl+Shift+→', 'hist_next',         '下一条（翻历史）'),
 ]
 
 # 首选键被别的软件占用时自动换下一个。
@@ -95,6 +98,9 @@ HOTKEY_ALTS = {
     4: [('Ctrl+Shift+K', ord('K')), ('Ctrl+Shift+F9', 0x78)],
     1: [('Ctrl+Shift+U', ord('U'))],
     2: [('Ctrl+Shift+L', ord('L'))],
+    # 方向键在某些输入法/远控里会被抢，给一组字母备用键
+    5: [('Ctrl+Shift+↑', 0x26), ('Ctrl+Shift+I', ord('I'))],
+    6: [('Ctrl+Shift+↓', 0x28), ('Ctrl+Shift+O', ord('O'))],
 }
 
 # ── 可调手感参数：读 config/settings.json（不写就用下面的默认值）──────────
@@ -220,6 +226,19 @@ class Teleprompter(QWidget):
         self._hotkey_last = {}
         self._fallback = []
         self._in_resize = False
+        # 缩略成小条：只留状态栏一行。之前那个「—」按钮调的是 showMinimized()，
+        # 而本窗口是 Tool 型无边框窗口 —— 它不进任务栏，最小化后就真的无处可点，
+        # 只能靠记住 Ctrl+Shift+H 才能找回。改成缩条之后，条还在屏幕上，点一下就回来。
+        self._bar_mode = False
+        self._restore_h = 0
+        # 用户自己拖过大小之后，就不再让「按内容自适应」的高度覆盖他调好的尺寸
+        self._user_sized = False
+        self._self_resize = False     # 我们自己调的 resize，不算用户操作
+        self._ready = False           # __init__ 结束前不把 resize 当用户操作
+        # 历史问答：按 Ctrl+Shift+←/→ 回看上一题，新答案一到就自动回到最新
+        self._history = []
+        self._hist_idx = -1           # -1 = 看最新（不覆盖当前内容）
+        self._live = None             # 翻历史时暂存当前这一题的状态
 
         self.setWindowTitle('面试提词器')
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint |
@@ -252,6 +271,10 @@ class Teleprompter(QWidget):
             self.ws.event.connect(self.on_event)
             self.ws.status.connect(self.on_status)
             self.ws.start()
+
+        self._build_tray()          # 托盘：真隐藏了也能一键找回
+        self._load_ui_state()       # 上次调好的窗口大小
+        self._ready = True          # 这之后的 resize 才算用户操作
 
     # ── UI ──
     def _place_on_cursor_screen(self):
@@ -297,7 +320,7 @@ class Teleprompter(QWidget):
         bar.addWidget(self.btn_expand)
         for txt, tip, fn in [('⏸', '暂停/恢复 (Ctrl+Shift+P)', self.toggle_pause),
                              ('⟳', '深度回答 (Ctrl+Shift+D)', self.run_deep),
-                             ('—', '最小化', self.showMinimized),
+                             ('▁', '缩略成小条（再点小条还原）', self.toggle_collapse_bar),
                              ('×', '退出', QApplication.quit)]:
             b = QPushButton(txt); b.setObjectName('icon'); b.setToolTip(tip)
             b.setFixedSize(26, 24); b.clicked.connect(fn); bar.addWidget(b)
@@ -341,8 +364,22 @@ class Teleprompter(QWidget):
 
         self.hint = QLabel(''); self.hint.setObjectName('hint')
         self.hint.setToolTip('Ctrl+Shift+E 展开/收起\nCtrl+Shift+H 隐藏/显示\n'
-                             'Ctrl+Shift+P 暂停/恢复\nCtrl+Shift+D 深度回答')
-        v.addWidget(self.hint)
+                             'Ctrl+Shift+P 暂停/恢复\nCtrl+Shift+D 深度回答\n'
+                             'Ctrl+Shift+← / → 翻上一条 / 下一条')
+        # 右下角拖拽把手。无边框窗口没有系统边框，只能自己给一个；
+        # 拖过一次之后 _user_sized 置位，自适应高度就不再覆盖你调好的尺寸。
+        self.footrow = QWidget()
+        fr = QHBoxLayout(self.footrow)
+        fr.setContentsMargins(0, 0, 0, 0); fr.setSpacing(4)
+        self.grip = QSizeGrip(self.footrow)
+        self.grip.setToolTip('拖我调浮窗大小；双击这里恢复默认大小')
+        fr.addWidget(self.hint, 1)
+        fr.addWidget(self.grip, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
+        v.addWidget(self.footrow)
+
+        # 缩略成小条时把这八块藏起来，只留最上面那行状态栏（点小条就还原）
+        self._body = [self.meter, self.qbox, self.corebox, self.preplan,
+                      self.expandbox, self.deepbox, self.manualrow, self.footrow]
 
     def _box(self, title, widget, tags=()):
         f = QFrame(); f.setObjectName('box')
@@ -405,6 +442,11 @@ class Teleprompter(QWidget):
 
     # ── 拖动 ──
     def mousePressEvent(self, e):
+        if self._bar_mode:
+            # 缩略成小条时，这一整条就是"点一下还原"的按钮（不是拖拽目标）
+            if e.button() == Qt.MouseButton.LeftButton:
+                self.toggle_collapse_bar()
+            return
         if e.button() == Qt.MouseButton.LeftButton:
             self._drag = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
 
@@ -417,6 +459,11 @@ class Teleprompter(QWidget):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
+        if not self._self_resize and self._ready:
+            # 拖拽把手（或系统）改的尺寸：进入"用户说了算"模式，并延迟落盘
+            if not self._bar_mode:
+                self._user_sized = True
+                self._save_timer.start(800)
         if self._in_resize:
             return
         self._in_resize = True
@@ -478,32 +525,56 @@ class Teleprompter(QWidget):
             self._full_h = max(self.height(), 320)   # 收起前记住展开时的高度
         self.set_expanded(not self.expanded)
 
+    def _resize_self(self, w, h):
+        """我们主动调的 resize —— 不算用户拖拽，别把 _user_sized 置位。"""
+        self._self_resize = True
+        try:
+            self.resize(max(320, int(w)), max(60, int(h)))
+        finally:
+            self._self_resize = False
+
     def _apply_window_height(self):
         """折叠时窗口只留「核心大字 + 状态栏」的高度；核心句行数一变就重算，
-        否则 QLabel 会被压扁（文字重叠、被裁掉半行）。"""
+        否则 QLabel 会被压扁（文字重叠、被裁掉半行）。
+
+        用户自己拖过大小之后（_user_sized）就不再自动改高度 —— 否则他刚调好，
+        下一个答案一来又被弹回去，等于白调。缩略成小条时压根不动。"""
+        if self._bar_mode:
+            return
         lay = self.layout()
         if lay is None:
             return
         lay.invalidate(); lay.activate()
+        if self._user_sized:
+            # 尺寸归用户，只保证内容不被压扁
+            floor = lay.minimumSize().height()
+            self._resize_self(self.width(), max(self.height(), min(900, floor)))
+            return
         need = lay.totalSizeHint().height() + 6      # QLabel 换行的 sizeHint 偏保守，留点余量
         if self.expanded:
             # 展开态维持原高度，只有内容真塞不下才长高
             floor_h = lay.minimumSize().height()
-            self.resize(self.width(), max(320, self._full_h, min(900, floor_h)))
+            self._resize_self(self.width(), max(320, self._full_h, min(900, floor_h)))
         else:
             h = max(150, min(420, need))
             self._mini_h = h
-            self.resize(self.width(), h)
+            self._resize_self(self.width(), h)
 
     def _sync_hint(self):
         hk = getattr(self, '_hotkey_name', {}) or {}
         short = lambda n: n.replace('Ctrl+Shift+', '').replace('Ctrl+Alt+', 'C-A+')
-        self.hint.setText('%s %s · %s 隐藏 · %s 暂停 · %s 深答'
+        tail = ''
+        if self._bar_mode:
+            tail = ' · 点这条还原'
+        elif self._history:
+            tail = ' · 历史 %s' % ('%d/%d' % (self._hist_idx + 1, len(self._history))
+                                   if self._hist_idx >= 0 else len(self._history))
+        self.hint.setText('%s %s · %s 隐藏 · %s 暂停 · %s 深答%s'
                           % (short(hk.get(4, 'Ctrl+Shift+E')),
                              '收起' if self.expanded else '展开',
                              short(hk.get(1, 'Ctrl+Shift+H')),
                              short(hk.get(2, 'Ctrl+Shift+P')),
-                             short(hk.get(3, 'Ctrl+Shift+D'))))
+                             short(hk.get(3, 'Ctrl+Shift+D')), tail))
 
     def _render_question(self):
         """折叠时面试官原话压成一行（省略号截断），展开时才全文换行。"""
@@ -589,6 +660,7 @@ class Teleprompter(QWidget):
             self.stats.setText('首字 %sms · 总 %.1fs%s' % (
                 ev.get('firstMs', 0), ev.get('totalMs', 0) / 1000,
                 ' · 离线题库' if ev.get('offline') else ''))
+            self.push_history()          # 这一题答完就存档，Ctrl+Shift+← 能翻回来
         elif t == 'slow':
             self.dot.setStyleSheet('color:#d9a441;')
             self.stage.setText('⚠ ' + str(ev.get('message', '快答线还没出字')))
@@ -713,6 +785,184 @@ class Teleprompter(QWidget):
     def closeEvent(self, e):
         self._unregister_hotkeys()
         super().closeEvent(e)
+
+    # ── 窗口大小：记住 / 重置 ──────────────────────────────────────
+    def _ui_state_path(self):
+        return os.path.join(_REPO_ROOT, 'config', 'ui_state.json')
+
+    def _load_ui_state(self):
+        """恢复上次调好的窗口大小。放在 config/ 下，跟其它本机配置一起被 gitignore。"""
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.timeout.connect(self._save_ui_state)
+        try:
+            with open(self._ui_state_path(), encoding='utf-8') as f:
+                st = json.load(f)
+        except Exception:
+            return
+        try:
+            w = int(st.get('width', 0)); h = int(st.get('height', 0))
+        except Exception:
+            return
+        if w >= 320 and h >= 150:
+            self._user_sized = True
+            self._self_resize = True
+            try:
+                self.resize(w, h)
+            finally:
+                self._self_resize = False
+            self._full_h = max(self._full_h, h)
+            print('[浮窗] 已恢复上次的窗口大小 %dx%d' % (w, h), flush=True)
+
+    def _save_ui_state(self):
+        if not self._ready or self._bar_mode:
+            return
+        try:
+            os.makedirs(os.path.dirname(self._ui_state_path()), exist_ok=True)
+            with open(self._ui_state_path(), 'w', encoding='utf-8') as f:
+                json.dump({'width': self.width(), 'height': self.height()}, f)
+        except Exception as e:
+            print('[浮窗] 窗口大小没存下来: %s' % e, flush=True)
+
+    def reset_size(self):
+        """回到默认大小：忘掉用户尺寸，重新按内容自适应。"""
+        self._user_sized = False
+        try:
+            os.remove(self._ui_state_path())
+        except Exception:
+            pass
+        if self._bar_mode:
+            self.toggle_collapse_bar()
+        self._full_h = 660
+        self._resize_self(580, 660)
+        self._apply_window_height()
+        print('[浮窗] 已恢复默认大小 580x660', flush=True)
+
+    # ── 缩略成小条 ────────────────────────────────────────────────
+    def toggle_collapse_bar(self):
+        """缩成只剩状态栏的一行，贴在原处；点这一行（或再按一次）还原。
+
+        为什么不用 showMinimized()：本窗是 Tool 型无边框窗口，不进任务栏，
+        最小化之后屏幕上不留任何可点的东西 —— 用户只能靠记住热键找回来。"""
+        if self._bar_mode:
+            self._bar_mode = False
+            for w in self._body:
+                w.show()
+            if not self._deep_ready:
+                self.deepbox.hide()
+            self._render_question()
+            self._apply_window_height()
+        else:
+            self._restore_h = self.height()
+            self._bar_mode = True
+            for w in self._body:
+                w.hide()
+            # hide() 之后必须让布局重算一次再 resize：否则 QWidget.resize() 会被
+            # 旧的 minimumSize（= 所有控件加起来的高度）挡回去 —— 实测那样缩完还剩 208px，
+            # 看起来跟没缩一样。重算之后布局只要求状态栏那一行。
+            lay = self.layout()
+            lay.invalidate(); lay.activate()
+            bar_h = max(40, lay.itemAt(0).sizeHint().height() + 18)
+            self.setMinimumHeight(0)
+            self._resize_self(self.width(), bar_h)
+        # 缩略态把鼠标变成手型：这一整条现在是个"点一下就展开"的按钮
+        self.setCursor(Qt.CursorShape.PointingHandCursor if self._bar_mode
+                       else Qt.CursorShape.ArrowCursor)
+        self._sync_hint()
+
+    # ── 托盘：真隐藏了也能找回来 ──────────────────────────────────
+    def _build_tray(self):
+        try:
+            if not QSystemTrayIcon.isSystemTrayAvailable():
+                print('[浮窗] 本机没有系统托盘，跳过（缩略小条仍然可用）', flush=True)
+                return
+            pm = QPixmap(32, 32)
+            pm.fill(Qt.GlobalColor.transparent)
+            p = QPainter(pm)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            p.setBrush(QColor('#3a7bd5')); p.setPen(Qt.PenStyle.NoPen)
+            p.drawEllipse(3, 3, 26, 26)
+            p.setBrush(QColor('#ffffff'))
+            p.drawEllipse(11, 11, 10, 10)
+            p.end()
+            self.tray = QSystemTrayIcon(QIcon(pm), self)
+            self.tray.setToolTip('面试提词器 — 双击显示 / 隐藏')
+            m = QMenu()
+            m.addAction('显示 / 隐藏浮窗（Ctrl+Shift+H）', self.toggle_visibility)
+            m.addAction('缩略成小条 / 还原', self.toggle_collapse_bar)
+            m.addAction('暂停 / 恢复（Ctrl+Shift+P）', self.toggle_pause)
+            m.addSeparator()
+            m.addAction('恢复默认大小', self.reset_size)
+            m.addAction('退出', QApplication.quit)
+            self.tray.setContextMenu(m)
+            self.tray.activated.connect(self._on_tray)
+            self.tray.show()
+        except Exception as e:
+            print('[浮窗] 托盘没起来（不影响使用）: %s' % e, flush=True)
+
+    def _on_tray(self, reason):
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            self.toggle_visibility()
+
+    # ── 历史：翻上一条 / 下一条 ───────────────────────────────────
+    def push_history(self):
+        """一次问答结束就存档。只在有核心句时存，避免把空题也塞进来。"""
+        core = (self._core_text or '').strip()
+        if not core or core in ('—', '…'):
+            return
+        self._history.append({'q': self.cur_q, 'core': core,
+                              'full': self.expand.toPlainText(),
+                              'qtype': self.qtype.text(), 'ts': time.strftime('%H:%M:%S')})
+        del self._history[:-40]          # 只留最近 40 条，面试一场足够
+        self._hist_idx = -1
+        self._live = None
+        self._sync_hint()
+
+    def _snapshot_live(self):
+        return {'q': self.cur_q, 'core': self._core_text,
+                'full': self.expand.toPlainText(), 'qtype': self.qtype.text()}
+
+    def _show_hist(self):
+        h = self._history[self._hist_idx]
+        self.q.setWordWrap(True)
+        self.q.setText('【历史 %d/%d · %s】%s' % (self._hist_idx + 1, len(self._history),
+                                                h['ts'], h['q'] or ''))
+        self._set_core(h['core'])
+        self.expand.setPlainText(h['full'])
+        self.stage.setText('回看历史 %d/%d（→ 回到最新）' % (self._hist_idx + 1, len(self._history)))
+
+    def _restore_live(self):
+        self._hist_idx = -1
+        if self._live is None:
+            return
+        live, self._live = self._live, None
+        self.cur_q = live['q']
+        self._render_question()
+        self._set_core(live['core'])
+        self.expand.setPlainText(live['full'])
+        self.qtype.setText(live['qtype'])
+
+    def hist_prev(self):
+        """往前翻：看的是一条更早的问答。"""
+        if not self._history:
+            return
+        if self._hist_idx < 0:
+            self._live = self._snapshot_live()
+            self._hist_idx = len(self._history) - 1
+        else:
+            self._hist_idx = max(0, self._hist_idx - 1)
+        self._show_hist()
+
+    def hist_next(self):
+        """往后翻：越过最新一条就回到当前这一题。"""
+        if self._hist_idx < 0:
+            return
+        if self._hist_idx >= len(self._history) - 1:
+            self._restore_live()
+            self._sync_hint()
+            return
+        self._hist_idx += 1
+        self._show_hist()
 
     # ── 操作 ──
     def toggle_visibility(self):
@@ -869,6 +1119,48 @@ def run_selftest(app, w):
             print('[selftest] 实按 Ctrl+Shift+D 兜底 -> 展开 %s => %s' % (before, w.expanded))
         except Exception as e:
             print('[selftest] 兜底实按自测跳过:', repr(e))
+    # 场景 7：缩略成小条 -> 点一下还原（旧版这里是 showMinimized()，最小化后无处可点）
+    w.set_expanded(False); settle()
+    h_before = w.height()
+    w.toggle_collapse_bar(); settle()
+    bar_ok = w._bar_mode and w.height() < h_before and w.isVisible()
+    print('[selftest] 缩略成小条 -> 模式=%s 高度 %d->%d 仍可见=%s %s'
+          % (w._bar_mode, h_before, w.height(), w.isVisible(), 'PASS' if bar_ok else 'FAIL'))
+    shot('.selftest_bar.png')
+    w.toggle_collapse_bar(); settle()
+    back_ok = (not w._bar_mode) and w.height() > 60
+    print('[selftest] 点小条还原 -> 模式=%s 高度=%d %s'
+          % (w._bar_mode, w.height(), 'PASS' if back_ok else 'FAIL'))
+
+    # 场景 8：历史回看 —— 存两条旧的，再翻回去，最后必须能回到"当前这一题"
+    w.cur_q = '历史第一题'; w._set_core('历史第一题的核心句：召回 500。'); w.expand.setPlainText('第一题展开')
+    w.push_history()
+    w.cur_q = '历史第二题'; w._set_core('历史第二题的核心句：粗排 60。'); w.expand.setPlainText('第二题展开')
+    w.push_history()
+    w.cur_q = '当前这一题'; w._set_core('当前这一题的核心句：A/B 14 天。'); w.expand.setPlainText('当前展开')
+    tap(5)
+    h1 = (w._hist_idx, w._core_text)
+    print('[selftest] Ctrl+Shift+← 第 1 次 -> 位置=%d 核心=%r' % h1)
+    shot('.selftest_hist.png')
+    tap(5)
+    h2 = (w._hist_idx, w._core_text)
+    print('[selftest] Ctrl+Shift+← 第 2 次 -> 位置=%d 核心=%r' % h2)
+    tap(6); tap(6)
+    h3 = (w._hist_idx, w._core_text)
+    print('[selftest] Ctrl+Shift+→ 翻回最新 -> 位置=%d 核心=%r' % h3)
+    hist_ok = (h1[1].startswith('历史第二题') and h2[1].startswith('历史第一题')
+               and h3[0] == -1 and h3[1].startswith('当前这一题'))
+    print('[selftest] 历史回看 %s' % ('PASS' if hist_ok else 'FAIL'))
+
+    # 场景 9：拖拽调大小 -> 进入"用户说了算"，自适应不再覆盖
+    w.resize(700, 520); settle()
+    print('[selftest] 拖到 700x520 -> _user_sized=%s 实际 %dx%d'
+          % (w._user_sized, w.width(), w.height()))
+    w._apply_window_height(); settle()
+    size_ok = w._user_sized and w.width() == 700 and w.height() >= 520
+    print('[selftest] 自适应不再覆盖用户尺寸 %s' % ('PASS' if size_ok else 'FAIL'))
+    print('[selftest] 托盘图标 =', bool(getattr(w, 'tray', None)))
+
     print('[selftest] 结束')
     QTimer.singleShot(60, app.quit)   # 让 exec() 正常跑起来再退出，保证退出码 0
 

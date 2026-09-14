@@ -32,6 +32,8 @@ config/domain_words.txt
 config/doc_expand.json
 config/doc_expand.json.tmp
 config/doc_expand.log
+# 浮窗自己记的窗口大小（拖过右下角把手才会生成）
+config/ui_state.json
 
 # ── 你自己的面试材料、会话记录、测试产物 ──────────────────────
 knowledge/*
