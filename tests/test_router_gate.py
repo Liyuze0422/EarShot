@@ -58,3 +58,22 @@ def test_explicit_rule_beats_catch_all():
 def test_short_noise_is_skipped():
     for t in ['嗯', '好的', '.,', '必了.']:
         assert router.is_skip(t) is True, t
+
+
+def test_device_words_do_not_kill_a_real_question():
+    """设备词（麦克风/摄像头）不能裸拦 —— 那会把真问题一起丢掉。
+
+    踩过（2026-09-14 第一次实机演练，把真实面试录音从播放设备播出去走完整
+    采集链路）：HR 问"如果从麦克风开始到机器人做出动作，你们中间会经过哪
+    一些环节呢"，整句因为含"麦克风"三个字被判成设备调试话，一道核心问题
+    直接漏放，屏幕上什么都没出。
+
+    设备调试话本身不带疑问形式，末尾的兜底拦得住（"稍等我看一下麦克风"
+    → 无问句 → skip），所以裸设备词不需要单独成规则。
+    """
+    for t in ['那如果从麦克风开始的话到机器人做出动作，你们中间会经过哪一些环节呢？',
+              '麦克风采集到语音之后，你们中间会经过哪些环节',
+              '摄像头这块你是怎么做的？']:
+        assert router.is_skip(t) is False, t
+    for t in ['稍等我看一下麦克风', '我这边麦克风好像有点问题', '听得到吗？']:
+        assert router.is_skip(t) is True, t
