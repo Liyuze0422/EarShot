@@ -21,7 +21,7 @@ import answer  # noqa: E402
 
 def test_gap_prompt_does_not_surrender():
     s = answer.S_GAP
-    for mark in ('【实话】', '【对比】', '【什么时候用】', '【反问】'):
+    for mark in ('【实话】', '【对比】', '【展开】', '【什么时候用】', '【反问】'):
         assert mark in s, mark
     assert '【坦诚】' not in s, '旧标记名已经弃用'
     assert '这块我确实没有实际用过，不装懂。' not in s, '旧的认输示例句还在'
@@ -34,6 +34,18 @@ def test_gap_prompt_bans_surrender_words():
     assert '没落到项目里' in s
     # 也不许拿"没做过平行方案"这种空话把【对比】糊过去
     assert '绝对不许写"我没做过平行方案"' in s
+
+
+def test_gap_expand_section_only_expands_my_own_work():
+    """【展开】是缺口题里唯一允许讲细节的地方，但细节必须是"我的做法"的细节。
+
+    用户喜欢"展开"这种把事讲具体的写法（经历/行为题里那一段就是这么写的），
+    但缺口题的前提是"我没做过" —— 一旦允许展开面试官问的那项技术，
+    模型就会往编的方向使劲。所以写死了：只许展开我自己的做法。
+    """
+    s = answer.S_GAP
+    assert '不许展开面试官问的那项技术' in s
+    assert '不许编"我踩过的坑"' in s
 
 
 def test_gap_anchor_query_is_defined():
