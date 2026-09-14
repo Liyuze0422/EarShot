@@ -27,6 +27,11 @@ config/terms_review.md
 # 你的私有词表（项目名、领域术语）：只属于你本机，仓库里放的是 .example 版本
 config/topic_terms.json
 config/domain_words.txt
+# 换说法扩展词：由 tools/kb_expand.py 从**你的私有材料**生成，
+# 每一条都带着你材料里的概念和项目细节。它是构建产物，不进仓库。
+config/doc_expand.json
+config/doc_expand.json.tmp
+config/doc_expand.log
 
 # ── 你自己的面试材料、会话记录、测试产物 ──────────────────────
 knowledge/*

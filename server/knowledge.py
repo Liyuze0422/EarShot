@@ -111,6 +111,38 @@ def corpus_globs():
     return out
 CHUNK_MIN, CHUNK_MAX = 300, 700
 TITLE_WEIGHT = 4          # 文件名在词袋里重复几次
+# 「换个说法」扩展词在词袋里重复几次。它们由 tools/kb_expand.py 离线生成，
+# 存的是一句句"面试官可能怎么问这块"。1 次就够 —— 这些是提问句式，
+# 权重给大了会把材料原文的内容词压掉。
+EXPAND_WEIGHT = 1
+_EXPAND_FILE = 'doc_expand.json'
+_expand_cache = {}
+
+
+def _chunk_key(text):
+    import hashlib
+    return hashlib.sha1(re.sub(r'\s+', '', text or '').encode('utf-8')).hexdigest()[:16]
+
+
+def load_expand(reload=False):
+    """读 config/doc_expand.json（按内容 hash 索引）。
+
+    为什么按 hash 不按块序号：材料改一个字，hash 就变了，这一块自动没有
+    扩展词、退回纯原文检索 —— 比"序号对不上导致张冠李戴"安全得多。
+    """
+    if _expand_cache and not reload:
+        return _expand_cache.get('t')
+    p = os.path.join(settings.REPO_ROOT, 'config', _EXPAND_FILE)
+    t = {}
+    try:
+        if os.path.exists(p):
+            with open(p, encoding='utf-8') as f:
+                t = json.load(f) or {}
+    except Exception as e:
+        print('[知识库] %s 读取失败（忽略扩展词继续）：%s' % (_EXPAND_FILE, e))
+        t = {}
+    _expand_cache['t'] = t
+    return t
 
 # ── 领域词典：钉住会被 jieba 切碎的专业词 ──────────────────────────────────
 DOMAIN_WORDS = [
@@ -292,6 +324,14 @@ RRF_W_WORD = 1.0           # 词级 BM25 通道权重
 #     wb=0.7  66.7% / 76.9%            wb=1.0  64.1% / 76.9%   (hit@1 / hit@3)
 # 口径：tools/test_retrieval_real.py（39 条有明确材料的真实提问）。详见文件头。
 RRF_W_BIGRAM = 0.0
+# 「换说法」扩展词走**独立通道**，不混进材料词袋。
+# 混进去实测会掉 hit@3（词袋变大 → BM25 长度归一化惩罚所有真实词）：
+#   混入词袋：换说法 hit@1 15.8→31.6 但原题 hit@3 94.9→92.3、换说法带历史 hit@3 84.2→78.9
+# 独立通道只影响"排得上名的块"，不动其余块的分数，两边都不吃亏。
+RRF_W_EXPAND = 0.0
+# 词袋法里，扩展词算不算进 BM25 的长度归一化（dl）。
+# True = 只算原文长度（不掉 hit@3，但增益也小）；False = 一起算（增益大，原题 hit@3 -2.6）。
+DL_EXCLUDE_EXPAND = True
 # 兜底模式：词级通道候选 chunk 数 < BIGRAM_FALLBACK_MIN_HITS 时，让 bigram 通道顶上排序。
 # 正常提问（哪怕很口语）词级通道都远不止 2 个候选，所以这条兜底在真实回归集上不触发，
 # 只防"整句虚词/极短"到词级一路全军覆没的极端情况。
@@ -333,9 +373,20 @@ class BM25:
         self.chunks = chunks
         self.k1, self.b = k1, b
         # 文件名（含项目名）加权进词袋：问"推荐系统那个项目"时先命中 项目A_推荐系统.md
-        self.docs = [tok(c[1]) + tok(os.path.splitext(c[0])[0]) * TITLE_WEIGHT for c in chunks]
+        exp = load_expand()
+        # 每块材料附上"面试官可能怎么问这块"的通用说法（离线生成）。
+        # 这是换说法检索的唯一手段：材料写"LangGraph 九节点有向图工作流"，
+        # 面试官问"你那套任务编排怎么设计的"，字面零重合，只有预生成的
+        # 问法能把两者连起来。实测见 tools/kb_expand.py 顶部注释。
+        self.exp = [' '.join(exp.get(_chunk_key(c[1]), [])) for c in chunks]
+        base = [tok(c[1]) + tok(os.path.splitext(c[0])[0]) * TITLE_WEIGHT for c in chunks]
+        self.docs = [base[i] + tok(self.exp[i]) * EXPAND_WEIGHT for i in range(len(chunks))]
         self.tf = [Counter(d) for d in self.docs]
-        self.dl = [len(d) for d in self.docs]
+        # 长度只算**原文**，扩展词不进 dl —— 这是词袋法能不掉 hit@3 的关键。
+        # 把扩展词也算进 dl 的话，这一块的 dl/avgdl 一起变大，
+        # BM25 的长度归一化会把**该块所有真实词**的分数压下去，得不偿失（实测 hit@3 -2.6）。
+        # IDF 仍按含扩展词的 docs 统计，否则扩展词自己拿不到 IDF 分（恒 0，白加）。
+        self.dl = [len(d) for d in (base if DL_EXCLUDE_EXPAND else self.docs)]
         self.avgdl = sum(self.dl) / max(len(self.dl), 1)
         self.N = len(self.docs)
         self.idf = self._idf(self.docs)
@@ -346,6 +397,16 @@ class BM25:
         self.bdl = [len(d) for d in self.bdocs]
         self.bavgdl = sum(self.bdl) / max(len(self.bdl), 1)
         self.bidf = self._idf(self.bdocs)
+        # 第三路（可选，默认关）：只用「面试官可能怎么问这块」的扩展词建索引。
+        # 实测弱于词袋法（见 RRF_W_EXPAND 注释），默认 RRF_W_EXPAND=0 时
+        # **不建这份索引**，省内存也省建库时间。
+        self.has_exp = RRF_W_EXPAND > 0 and any(self.exp)
+        if self.has_exp:
+            self.edocs = [tok(self.exp[i]) * EXPAND_WEIGHT for i in range(len(chunks))]
+            self.etf = [Counter(d) for d in self.edocs]
+            self.edl = [len(d) for d in self.edocs]
+            self.eavgdl = sum(self.edl) / max(len(self.edl), 1)
+            self.eidf = self._idf(self.edocs)
 
     def _idf(self, docs):
         df = Counter()
@@ -408,6 +469,14 @@ class BM25:
             e = fused.setdefault(i, [0.0, 0.0, 0.0])
             e[0] += w_big / (RRF_K + rank)
             e[2] = sc
+        if self.has_exp and RRF_W_EXPAND > 0:
+            for rank, (sc, i) in enumerate(
+                    self._bm25_scores(qw, self.etf, self.eidf, self.edl, self.eavgdl,
+                                      boost_src, boost), 1):
+                fused.setdefault(i, [0.0, 0.0, 0.0])[0] += RRF_W_EXPAND / (RRF_K + rank)
+        # 注：独立通道实测**弱于词袋法**（单元测试 70.5% vs 100%）。RRF 是排名制，
+        # 一个通道排第 1 只给 weight/(K+1)，量级比不过直接进 TF-IDF 的贡献。
+        # 保留代码是为了以后能再试权重，默认 RRF_W_EXPAND=0 不生效。
         # 排序：融合分 → 词级原始分 → bigram 原始分 → 块序（全确定性，便于回归复现）
         order = sorted(fused.items(), key=lambda kv: (-kv[1][0], -kv[1][1], -kv[1][2], kv[0]))
         return [(e[0] * RRF_SCORE_SCALE, self.chunks[i][0], self.chunks[i][1])

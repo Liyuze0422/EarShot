@@ -384,6 +384,31 @@ def check_lexicon():
     return 'PASS', detail
 
 
+# ── 6.5 换说法扩展词覆盖率 ────────────────────────────────────────────
+def check_expand():
+    """扩展词是**构建产物**：材料改了它不会自己更新，得重跑 tools/kb_expand.py。
+
+    不查的话症状很隐蔽 —— 检索照常工作、只是"面试官换个说法就问不出来"，
+    而这正是最难自己察觉的那类退化。
+    """
+    import knowledge as K
+    try:
+        _, chunks = K.build()
+    except Exception as e:
+        return 'WARN', '读语料失败：%s' % str(e)[:80]
+    table = K.load_expand()
+    n = len(chunks)
+    have = sum(1 for _, t in chunks if table.get(K._chunk_key(t)))
+    detail = '扩展词覆盖 %d/%d 块' % (have, n)
+    if not table:
+        return 'WARN', detail + '\n全都没有 —— 面试官用自己的说法提问时会检索不到。' \
+            '\n跑 python tools/kb_expand.py 生成（离线一次，运行时不花钱）'
+    if have < n:
+        return 'WARN', detail + '\n有 %d 块没覆盖（多半是材料改过）。' \
+            '\n跑 python tools/kb_expand.py 补上（增量，只做缺的）' % (n - have)
+    return 'PASS', detail
+
+
 # ── 6.6 题库新鲜度 ────────────────────────────────────────────────────
 def check_bank_fresh():
     """题库比材料旧 = 材料更新了没重建，会一直用旧问法答新问题。"""
@@ -579,6 +604,7 @@ CHECKS = [
     ('ASR 模型加载+识别', check_asr),
     ('BM25 检索索引', check_retrieval),
     ('专名词表体检', check_lexicon),
+    ('换说法扩展词', check_expand),
     ('题库新鲜度', check_bank_fresh),
     ('DeepSeek 快答线', check_deepseek),
     ('端口 8765 占用', check_port),
