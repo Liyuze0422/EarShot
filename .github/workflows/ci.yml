@@ -22,6 +22,17 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install "ruff>=0.6" "pytest>=8.0"
+      - name: 安装快照测试需要的运行依赖
+        # 为什么必须装：tests/ 里多数用例在模块顶层就 import server/*，
+        # 而 server/* 在模块级 import 下面这些包 —— 少一个就是收集期
+        # ModuleNotFoundError，整轮 pytest 直接 exit 2（2026-09-12~09-14 CI 连续报红的原因）。
+        # 只列快照测试真正触达的最小集合：funasr_onnx / PyQt6 / openai
+        # 都是运行期按需 import（不在模块级），所以不装，省掉几百 MB 与几分钟。
+        run: |
+          python -m pip install "numpy>=1.26.4" "jieba>=0.42.1" "soundfile>=0.14.0" \
+                              "soundcard>=0.4.6" "fastapi>=0.141.1" "uvicorn>=0.51.0"
+      - name: 系统依赖（Linux 下 soundcard 需要 libpulse）
+        run: sudo apt-get install -y libpulse0
       - name: 语法编译（server / ui / tools）
         run: python -m compileall -q server ui tools
       - name: Ruff 静态检查
