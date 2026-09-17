@@ -85,6 +85,7 @@ from PyQt6.QtWidgets import (QApplication, QDialog, QFileDialog, QHBoxLayout, QL
                              QPushButton, QTextEdit, QVBoxLayout, QWidget)
 
 import settings                       # noqa: E402
+from version import __version__ as _VERSION   # noqa: E402  版本号只此一处
 import knowledge                      # noqa: E402
 
 SELFTEST = '--selftest' in sys.argv
@@ -551,7 +552,7 @@ class LibraryWindow(QWidget):
         foot.addWidget(self.go)
         v.addLayout(foot)
 
-        v.addWidget(QLabel('Liyuze0422 制作', objectName='sign'),
+        v.addWidget(QLabel('Liyuze0422 制作    v%s' % _VERSION, objectName='sign'),
                     0, Qt.AlignmentFlag.AlignRight)
 
         self.reload()

@@ -29,6 +29,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import settings            # 统一配置：环境变量 > config/settings.json > 默认值
+from version import __version__   # 版本号只此一处（server/version.py）
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
@@ -603,6 +604,7 @@ async def healthz():
     预热（加载 ASR + 建索引）的时候问的，墙钟出字时间从 1.2 秒涨到 3.8 秒。
     """
     return {'ready': bool(STATE['ready']), 'port': STATE['port'],
+            'version': __version__,      # 启动器/浮窗/自检都靠它报版本
             'device': STATE.get('device', ''), 'audio_restarts': STATE['audio_restarts']}
 
 

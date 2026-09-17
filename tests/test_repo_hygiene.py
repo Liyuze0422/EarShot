@@ -208,3 +208,27 @@ def test_skip_filter_handles_non_ascii_paths():
     missing = [p for p in probes if os.path.normcase(p) not in got]
     assert not missing, '这些被忽略的路径没有被识别出来：' + ', '.join(missing)
 
+
+def test_version_matches_changelog():
+    """程序里的版本号必须和 CHANGELOG 顶部的小节对得上。
+
+    两处各写一个数字早晚会漂移，而「这个 bug 是哪一版修的」「我装的是哪一版」
+    是最基本的问题 —— 偏偏装成 exe 之后用户看不到 git log，只能靠程序自己报。
+    所以版本号是三处一致：server/version.py ←→ CHANGELOG.md，以及 /healthz 的返回。
+    """
+    src = open(os.path.join(ROOT, 'server', 'version.py'), encoding='utf-8').read()
+    m = re.search(r"__version__\s*=\s*'([^']+)'", src)
+    assert m, 'server/version.py 里找不到 __version__'
+    ver = m.group(1)
+
+    cl = open(os.path.join(ROOT, 'CHANGELOG.md'), encoding='utf-8').read()
+    heads = re.findall(r'^## (\d+\.\d+\.\d+)', cl, re.M)
+    assert heads, 'CHANGELOG.md 里没有「## x.y.z」小节'
+    assert ver in heads, (
+        'server/version.py 写着 %s，但 CHANGELOG.md 的版本小节里没有它（最新是 %s）——'
+        ' 发版要同时改这两处' % (ver, heads[0]))
+
+    main_src = open(os.path.join(ROOT, 'server', 'main.py'), encoding='utf-8').read()
+    assert "'version': __version__" in main_src, \
+        '/healthz 没有再报 version —— 启动器与自检靠它确认装的是哪一版'
+

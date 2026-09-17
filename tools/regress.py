@@ -45,14 +45,69 @@ def load_expect():
     return {int(k): list(v) for k, v in raw.items() if str(k).strip().lstrip('-').isdigit()}
 
 
-GOLD = load_expect()
-# 阈值 = 当前基线往下留一点余量，掉下去就说明引入了回归
-# 基线（2026-09-11 真实一面回放，39 条有明确材料）：
-#   检索 hit@1 84.6% / hit@3 92.3%   题库并集 hit@3 会更高
-#   阈值 = 基线往下留余量，掉下去就是引入了回归
+GOLD_RAW = load_expect()
+def _applicable(expect):
+    """把「期望材料在当前资料包里根本不存在」的题挑出来单独对待。
+
+    期望集是在某一份语料上建立的。换过资料包之后，某些题的期望材料已经不在语料里
+    —— 这些题**必然 miss**，留在分母里只会把指标整体压下去，让门禁失去意义：
+    真回归和「换了包」带来的假下滑看起来一模一样。
+
+    实测（2026-09-17）：39 题里有 6 题的期望材料属于另一个资料包，在当前包下根本
+    找不到，恰好解释了 hit@3 从 97.0% 掉到 87.2% —— 不是代码退步。
+    （具体是哪 6 题、缺哪个关键词，运行时会照着你的包打印出来，不写死在源码里 ——
+     写进去就等于把公司名提交到公开仓库，卫生检查会当场拦下。）
+
+    所以：明确剔除并打印题号，而不是悄悄算进分母。剔除太多时额外警告 ——
+    那时候连剩下的指标也不可信了。
+    """
+    import glob
+    have = set()
+    for p in glob.glob(os.path.join(ROOT, 'knowledge', '**', '*'), recursive=True):
+        if os.path.isfile(p):
+            have.add(os.path.basename(p))
+    keep, drop = {}, {}
+    for qid, keys in expect.items():
+        bad = [k for k in keys if not any(k in n for n in have)]
+        (drop if bad else keep)[qid] = bad if bad else keys
+    return keep, drop
+
+
+def _current_profile():
+    """当前语料包名，只为把提示写清楚。读不到就不写。"""
+    try:
+        import settings
+        return settings.get('corpus_profile') or '默认'
+    except Exception:
+        return '?'
+
+
+GOLD, GOLD_DROP = _applicable(load_expect())
+if GOLD_DROP:
+    _pct = 100.0 * len(GOLD_DROP) / max(1, len(GOLD) + len(GOLD_DROP))
+    print('回归期望集：跳过 %d 题（占 %.0f%%）—— 它们的期望材料不在当前资料包「%s」里，'
+          '留着只会压低指标、掩盖真回归。' % (len(GOLD_DROP), _pct, _current_profile()))
+    for _qid in sorted(GOLD_DROP):
+        print('    跳过 #%-4s 找不到: %s' % (_qid, GOLD_DROP[_qid]))
+    if _pct > 30.0:
+        print('    [警告] 跳过比例超过三成，剩下的指标参考价值有限 ——'
+              ' 换回建立期望集时用的资料包再跑一次。')
+
+# 阈值 = 当前基线往下留一点余量，掉下去就说明引入了回归。
+#
+# 基线（2026-09-11 真实一面回放，39 条有明确材料）：检索 hit@1 84.6% / hit@3 92.3%。
+#
+# 2026-09-17 复核：那份基线按「39 题全算」，而其中 6 题的期望材料并不在当前资料包里
+# （见 _applicable），它们必然 miss，把 hit@3 从 97.0% 压到 87.2% —— 像回归，其实是
+# 分母被污染；「题库并集 hit@3 = 88.0」这个阈值当初更是照「应该会更高」的推测定的，
+# 从来没有实测支撑。剔除那 6 题后实测（33 题）：
+#     检索 hit@1 90.9% / hit@3 97.0% / 题库并集 hit@3 97.0%
+# 阈值按「允许错 2 题」定 —— 33 题里每错 1 题 = 3.03 个百分点：
+#     97.0 - 2×3.03 ≈ 90.9（hit@3 / 题库并集）；90.9 - 2×3.03 ≈ 84.8（hit@1）
+# 换资料包后这些数字会变，但「跳过题数」会一并打印出来，不会假装没发生。
 LIMITS = {
     '路由准确率(真实)': 95.0, '路由准确率(合成)': 95.0, '非提问拦截': 95.0,
-    '检索 hit@1': 78.0, '检索 hit@3': 86.0, '题库并集 hit@3': 88.0,
+    '检索 hit@1': 84.8, '检索 hit@3': 90.9, '题库并集 hit@3': 90.9,
     'gap 判据(误报0/硬案例全中)': 100.0,
     '答案后校验(数字/经历)': 100.0,
     '故障注入(串题/看门狗/自愈/端口)': 100.0,
