@@ -115,7 +115,25 @@ powershell -ExecutionPolicy Bypass -File scripts\setup.ps1   # 建环境 → 装
 powershell -ExecutionPolicy Bypass -File scripts\run.ps1     # 启动
 ```
 
-> 启动要花 8 秒左右（加载模型 4.0s + 预热 3.8s + 建索引 ~1.0s）。**这 8 秒就是在替你填「首次识别 21.7 秒」的坑**，看到界面出现才是真就绪 —— 别在面试开始之后才第一次启动。
+> 启动到浮窗可用约 **16 秒**（后端就绪 15.4s，再加浮窗）。其中约 12 秒在真正干活：
+> 模型加载 4.0s + 预热识别 3.8s + 建索引 1.0s + 答题链路预热 3.7s，其余是 import 与端口探测。
+> **这十几秒是在替你填「首次识别 21.7 秒」的坑**，看到界面出现才是真就绪 —— 别在面试开始之后才第一次启动。
+
+## 有新版本怎么知道
+
+**Star 不会通知你。** GitHub 只把通知发给 **Watch** 的人——star 只是收藏。
+这个仓库现在有 star 但**订阅者是 0**，所以发新版时谁也收不到消息。
+
+想收发布通知（只有发新版才会响，日常提交不吵）——点下面这个链接，把 Watch 设成 **Releases only**：
+
+👉 **https://github.com/Liyuze0422/EarShot/subscription**
+
+想连 issue、讨论一起收，就改成 All Activity。
+
+**已经装了 exe 的**：用 `EarShot.exe --version` 看自己的版本，和
+[Releases](https://github.com/Liyuze0422/EarShot/releases) 页面对一下。
+`config/` `knowledge/` `logs/` 都放在包外，所以**换掉 `dist/EarShot` 这个目录就等于升级**，
+资料、题库和会话日志都不会丢。
 
 ## 实测数据
 
