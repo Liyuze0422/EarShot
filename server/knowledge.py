@@ -87,6 +87,12 @@ def set_profile(name):
         termfix.reset_cache()
     except Exception:
         pass
+    # 题库也得清：它现在按资料包分文件（bank.bank_path()），不清就还拿着上一个包的题库。
+    try:
+        import bank
+        bank.reset_cache()
+    except Exception:
+        pass
     return active_profile()
 
 

@@ -28,9 +28,50 @@
 """
 import json
 import os
+import sys
 
-# 仓库根 = 本文件所在目录（server/）的上一级
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+def _find_data_root():
+    """从 exe 所在目录往上找 config/settings.json —— 打包后的固定套路。
+
+    打包布局是 dist/EarShot/EarShot.exe，而 config / knowledge / logs / 知识库 都在仓库根，
+    往上走两层才是。**必须和 tools/launch.py 的推断完全一致** —— 不一致的后果实测过：
+    启动器读到了真配置，后端却退回默认值，模型路径变成 dist/EarShot/models/… ，
+    而且因为仓库路径带中文，ASR 直接加载失败（报的却是「模型目录含非 ASCII 字符」，
+    看起来像路径配置问题，其实是数据根推错了）。
+    找不到就退回 exe 目录（那时数据得自己放旁边）。
+    """
+    d = os.path.dirname(sys.executable)
+    for _ in range(4):
+        if os.path.exists(os.path.join(d, 'config', 'settings.json')):
+            return d
+        up = os.path.dirname(d)
+        if up == d:
+            break
+        d = up
+    return os.path.dirname(sys.executable)
+
+
+def _split_roots():
+    """把「代码在哪」和「数据在哪」分开 —— 打包成 exe 之后这两件事不再是一回事。
+
+    普通运行：两者都是仓库根。
+    打包运行：代码被解到 sys._MEIPASS（一个临时解压目录），而 config / knowledge /
+              logs 必须在 **exe 旁边** —— 用户要能改配置、要能往里加材料、日志要留得住。
+              写进 _MEIPASS 的话下次启动就没了，而且用户根本找不到那个目录。
+    返回 (代码根, 数据根)。
+    """
+    if getattr(sys, 'frozen', False):
+        # 数据目录由启动器算好并通过环境变量传下来（它从 exe 往上找 config/settings.json），
+        # 这里只是兜底 —— 单独跑 exe 时也能起来。
+        data = os.environ.get('TP_DATA_ROOT') or _find_data_root()
+        return getattr(sys, '_MEIPASS', data), data
+    here = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(here)
+    return root, root
+
+
+BUNDLE_ROOT, REPO_ROOT = _split_roots()
 SETTINGS_PATH = os.path.join(REPO_ROOT, 'config', 'settings.json')
 SETTINGS_EXAMPLE_PATH = os.path.join(REPO_ROOT, 'config', 'settings.example.json')
 

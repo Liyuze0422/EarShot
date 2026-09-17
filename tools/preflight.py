@@ -414,7 +414,7 @@ def check_bank_fresh():
     """题库比材料旧 = 材料更新了没重建，会一直用旧问法答新问题。"""
     import json as _json
     import bank as _bank                       # 题库存哪由 bank.py 决定，别在这儿再抄一份路径
-    bank = _bank.BANK_FILE
+    bank = _bank.bank_path()                   # 按资料包分文件：题库_<包名>.json 优先
     files = []
     for g in settings.corpus_globs():
         files += glob.glob(g, recursive=True)
@@ -501,6 +501,56 @@ def check_ui():
     else:
         detail += '\n跑的是 ui/app.py 的临时副本，截图在 %s（没覆盖 ui/.selftest.png）' % os.path.relpath(png, ROOT)
     return 'PASS', detail
+
+
+def check_library():
+    """启动前的选库窗口（ui/library.py）。
+
+    双击「启动提词器.bat」第一眼看到的就是它 —— 它崩了，用户看到的是"什么都没发生"
+    （旧流程会直接起后端，新流程卡在选库这一步），所以单独钉一条。
+    """
+    if FAST:
+        return 'SKIP', '--fast 跳过（起 Qt 进程约 4-6 秒，和浮窗自检同一量级）'
+    lib_py = os.path.join(UI_DIR, 'library.py')
+    if not os.path.exists(lib_py):
+        return 'SKIP', 'ui/library.py 不存在（启动会退回「直接用当前库」的老流程）'
+    if '--selftest' not in open(lib_py, encoding='utf-8', errors='replace').read():
+        return 'SKIP', 'ui/library.py 里没有 --selftest 入口，外部没法验证，不瞎猜'
+
+    work = os.path.join(WORK_DIR, 'library_selftest')
+    os.makedirs(work, exist_ok=True)
+    copy = os.path.join(work, 'library_selftest.py')
+    shutil.copy2(lib_py, copy)        # 跑副本：截图落在 .tmp，不覆盖 ui/.selftest_*.png
+    # 截图名以点开头（和 ui/app.py 的惯例一致，免得被 git 追踪）——
+    # glob 的 * 匹配不到前导点，这里必须点名删，否则会拿上一轮的旧图冒充。
+    shots = [os.path.join(work, '.selftest_library.png'),
+             os.path.join(work, '.selftest_newlib.png')]
+    for old in shots:
+        try:
+            os.remove(old)
+        except OSError:
+            pass
+    env = os.environ.copy()
+    env['PYTHONIOENCODING'] = 'utf-8'
+    t0 = time.time()
+    try:
+        p = subprocess.run([sys.executable, '-X', 'utf8', copy, '--selftest'],
+                           cwd=ROOT, env=env, capture_output=True, timeout=UI_TIMEOUT,
+                           encoding='utf-8', errors='replace')
+    except subprocess.TimeoutExpired:
+        return 'FAIL', '选库窗口 %.0f 秒没退出（Qt 卡死/没有桌面会话？）' % UI_TIMEOUT
+    dt = time.time() - t0
+    out = (p.stdout or '') + (p.stderr or '')
+    lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+    if p.returncode != 0:
+        return 'FAIL', '选库窗口自检退出码 %s: %s' % (p.returncode, _clip(' | '.join(lines[-2:]), 110))
+    pngs = [p for p in shots if os.path.exists(p)]
+    if not pngs:
+        return 'FAIL', '进程正常退出（%.1fs）但没生成截图，自检路径可能变了' % dt
+    m = re.search(r'\[selftest\] 库 (\d+) 个', out)
+    return 'PASS', '选库窗口渲染 OK：列出 %s 个知识库，截图 %s（%.1fs）\n截图在 %s' % (
+        m.group(1) if m else '?', ', '.join(os.path.basename(x) for x in pngs), dt,
+        os.path.relpath(work, ROOT))
 
 
 # ── 8. 全局快捷键 ─────────────────────────────────────────────────────
@@ -609,6 +659,7 @@ CHECKS = [
     ('DeepSeek 快答线', check_deepseek),
     ('端口 8765 占用', check_port),
     ('浮窗启动 + 截图', check_ui),
+    ('选库窗口 + 截图', check_library),
     ('全局快捷键注册', check_hotkey),
 ]
 

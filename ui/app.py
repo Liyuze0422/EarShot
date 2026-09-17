@@ -30,13 +30,43 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QTextEdit, QLineEdit, QPushButton, QFrame,
                              QSizeGrip, QSystemTrayIcon, QMenu)
 
+def _data_root():
+    """数据目录（.runtime_port / .ui_pid / config / knowledge / logs）。
+
+    打包成 exe 之后代码在 sys._MEIPASS（临时解压目录），数据必须留在 exe 旁边 ——
+    端口文件写进 _MEIPASS 的话启动器读不到，会一直以为「后端没起来」。
+    """
+    if getattr(sys, 'frozen', False):
+        # 启动器算好的数据目录（它从 exe 往上找 config/settings.json）—— 端口文件必须
+        # 和启动器写在同一个地方，否则它读不到，会一直以为"后端没起来"。
+        if os.environ.get('TP_DATA_ROOT'):
+            return os.environ['TP_DATA_ROOT']
+        d = os.path.dirname(sys.executable)          # 兜底：自己往上找一遍，和 settings 保持一致
+        for _ in range(4):
+            if os.path.exists(os.path.join(d, 'config', 'settings.json')):
+                return d
+            up = os.path.dirname(d)
+            if up == d:
+                break
+            d = up
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _code_root():
+    """代码目录：打包后是 _MEIPASS，平时和数据目录是同一个。"""
+    if getattr(sys, 'frozen', False):
+        return getattr(sys, '_MEIPASS', _data_root())
+    return _data_root()
+
+
 WS_URL = 'ws://127.0.0.1:8765/ws'
 # 后端 8765 被占时会自动顺延，并把实际端口写在这里。UI 每次重连都重新读一遍，
 # 后端换端口重启也能自动跟上（旧版写死 8765，端口一冲突就永远"未连接"）。
-PORT_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.runtime_port')
+PORT_FILE = os.path.join(_data_root(), '.runtime_port')
 # 浮窗自己的 PID：启动器靠它判断"是不是已经开了一个" —— 两个浮窗同时在跑
 # 会出现两份一样的画面，还会莫名其妙抢焦点。
-PID_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.ui_pid')
+PID_FILE = os.path.join(_data_root(), '.ui_pid')
 
 
 def write_pid():
@@ -106,10 +136,10 @@ HOTKEY_ALTS = {
 # ── 可调手感参数：读 config/settings.json（不写就用下面的默认值）──────────
 # 复用后端那一份配置读取逻辑（server/settings.py），避免「UI 一套默认、后端另一套」。
 # 读失败（比如只拷了 ui/ 目录）不该让浮窗起不来，一律回落到默认值。
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_REPO_ROOT = _data_root()
 try:
-    if os.path.join(_REPO_ROOT, 'server') not in sys.path:
-        sys.path.insert(0, os.path.join(_REPO_ROOT, 'server'))
+    if os.path.join(_code_root(), 'server') not in sys.path:
+        sys.path.insert(0, os.path.join(_code_root(), 'server'))
     import settings as _SETTINGS
 except Exception:
     _SETTINGS = None

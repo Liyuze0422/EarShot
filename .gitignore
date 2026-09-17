@@ -6,7 +6,15 @@ __pycache__/
 .wheels/
 .tmp/
 logs/
+
+# ── 打包产物（PyInstaller，见 EarShot.spec）───────────────────────
+build/
+dist/
+# 双击入口的快捷方式（本地用，不进仓库）
+*.lnk
 .runtime_port
+# 选库窗口写的结果（ui/library.py -> tools/launch.py），里面是库名 —— 库名就是公司名。
+.runtime_profile
 .ui_pid
 
 # ── ASR 模型（约 230MB，用 tools/download_model.py 下载）────────

@@ -31,6 +31,21 @@ PER_WINDOW = 10
 WORKERS = 6
 OUT = os.path.join(ROOT, '知识库', '题库.json')
 
+
+def out_path():
+    """写到哪：跟着当前资料包走（题库_<包名>.json）；没启用分包时还是原来的 题库.json。
+
+    这样来回换公司不用重建 —— 每个包各留一份，切回来直接复用（见 server/bank.py 的 bank_path）。
+    """
+    try:
+        import knowledge as _k
+        prof = _k.active_profile()
+    except Exception:
+        prof = ''
+    if prof:
+        return os.path.join(ROOT, '知识库', '题库_%s.json' % prof)
+    return OUT
+
 SYS = """你在帮一个求职者做面试提词器。下面是他自己的面试材料片段。
 
 请站在面试官的角度，生成他会怎么**口头**问的问题，以及求职者应该怎么回答。
@@ -144,12 +159,13 @@ if __name__ == '__main__':
             allq += items
             print('  [%2d/%d] %-44s +%2d 条 %s' % (n, len(ws), src[:42], len(items), err[:40]), flush=True)
 
+    out = out_path()
     n_old = 0
-    if os.path.exists(OUT):
-        n_old = len(json.load(open(OUT, encoding='utf-8')).get('items', []))
+    if os.path.exists(out):
+        n_old = len(json.load(open(out, encoding='utf-8')).get('items', []))
     if args.merge and n_old:
         print('合并已有题库 %d 条' % n_old)
-        allq = json.load(open(OUT, encoding='utf-8')).get('items', []) + allq
+        allq = json.load(open(out, encoding='utf-8')).get('items', []) + allq
     seen = set(); uniq = []
     for it in allq:
         if it['q'] in seen:
@@ -170,13 +186,13 @@ if __name__ == '__main__':
             print('已中止，没有写文件。')
             sys.exit(2)
 
-    os.makedirs(os.path.dirname(OUT), exist_ok=True)
+    os.makedirs(os.path.dirname(out), exist_ok=True)
     json.dump({'source': '面试材料自动生成', 'count': len(uniq), 'items': uniq},
-              open(OUT, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
+              open(out, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
     print()
     print('=' * 70)
     print('生成 %d 条（去重后 %d），失败窗口 %d，用时 %.0f 秒' % (len(allq), len(uniq), fails, time.time() - t0))
-    print('已写: %s' % OUT)
+    print('已写: %s' % out)
     from collections import Counter
     for s, n in Counter(x['src'] for x in uniq).most_common():
         print('  %3d  %s' % (n, s[:52]))

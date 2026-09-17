@@ -19,6 +19,30 @@ sys.path.insert(0, HERE)
 from knowledge import BM25, detect_topic
 
 BANK_FILE = os.path.join(HERE, '..', '知识库', '题库.json')
+
+
+def bank_path():
+    """题库文件：优先用当前资料包专属的「题库_<包名>.json」，没有就回退通用的「题库.json」。
+
+    为什么按包分文件：题库是材料的派生物（tools/build_bank.py 从材料里生成口语问法），
+    换一家面试就得重建一次（约 1 分钟）。分成每包一份之后**来回切就是秒级的** —— 跑过的
+    包不用重建。文件仍然被 .gitignore 的 `*题库*.json` 挡住，不会外泄。
+    """
+    try:
+        import knowledge as _k
+        prof = _k.active_profile()
+    except Exception:
+        prof = ''
+    if prof:
+        p = os.path.join(HERE, '..', '知识库', '题库_%s.json' % prof)
+        if os.path.exists(p):
+            return p
+    return BANK_FILE
+
+
+def reset_cache():
+    """切资料包之后调用：下次 lookup 重新读题库（否则拿的还是上一个包的缓存）。"""
+    _cache.clear()
 # 注意：不按"分数阈值"自动切到直接铺答案。
 # 实测 39 条真实提问的分数分布是重叠的（未命中组最高 8.11 > 命中组最低 4.89），
 # 阈值分不开，硬切会把大量不相关的问题也直接铺出去。
@@ -29,7 +53,7 @@ _cache = {}
 def load():
     if 'items' in _cache:
         return _cache['items'], _cache['idx']
-    path = os.path.abspath(BANK_FILE)
+    path = os.path.abspath(bank_path())
     if not os.path.exists(path):
         _cache['items'], _cache['idx'] = [], None
         return _cache['items'], _cache['idx']

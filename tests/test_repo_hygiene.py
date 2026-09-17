@@ -172,8 +172,14 @@ def test_generated_artifacts_from_private_material_are_ignored():
         return
     must_ignore = (
         '知识库/题库.json',
+        # 题库现在按资料包分文件（题库_<包名>.json，见 server/bank.py 的 bank_path）——
+        # 每个包一份，同样是"材料派生物"，同样不能进公开仓库。
+        '知识库/题库_某公司.json',
         'bank.json',
         '另一个题库.json',
+        # 启动前的选库窗口把选中的库名写在这里（ui/library.py -> tools/launch.py）。
+        # 库名就是公司名，落进公开仓库等于把面试目标公司写出去。
+        '.runtime_profile',
         'server/__pycache__/bank.cpython-312.pyc',
     )
     leaked = []
