@@ -417,8 +417,18 @@ def main():
         sys.argv = [target] + rest
         runpy.run_path(target, run_name='__main__')
         return 0
+    if '--version' in sys.argv[1:]:
+        # 装成 exe 之后用户看不到 git log，命令行也要能问出版本
+        try:
+            sys.path.insert(0, os.path.join(CODE, 'server'))
+            from version import __version__
+            print('EarShot %s' % __version__)
+        except Exception:
+            print('EarShot (版本号读不到)')
+        return 0
     ap = argparse.ArgumentParser()
     ap.add_argument('--check', action='store_true', help='只看状态，不启动')
+    ap.add_argument('--version', action='store_true', help='打印版本号后退出')
     ap.add_argument('--no-ui', action='store_true', help='只起后端')
     ap.add_argument('--no-library', action='store_true', help='跳过选库窗口，直接用当前库启动')
     ap.add_argument('--stop', action='store_true', help='停掉所有提词器进程（后端 + 浮窗）')

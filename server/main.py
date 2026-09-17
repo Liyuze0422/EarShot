@@ -16,6 +16,9 @@ import re
 import sys
 import json
 import time
+# 尽可能早地记下进程启动时刻：启动耗时的真相要从这里算起。
+# 之前只从 boot() 开算，漏掉了 import 与 uvicorn 绑定端口的那一段。
+_T_PROC = time.time()
 import glob
 import asyncio
 import socket
@@ -38,6 +41,12 @@ import uvicorn
 
 from asr_engine import (LoopbackCapture, EnergyVAD, SenseVoiceASR, SR,
                         calibrate_threshold, default_speaker_name)
+
+# 分段计时第 1 段：解释器启动 + 全部依赖 import（下一段是 uvicorn 起来之前）。
+try:
+    print('[boot] import 完成     %5.1fs' % (time.time() - _T_PROC), flush=True)
+except Exception:
+    pass
 
 ROOT = settings.REPO_ROOT
 MODEL_DIR = settings.model_dir()     # 默认 <仓库根>/models/SenseVoiceSmall-onnx，**必须纯 ASCII**
@@ -242,9 +251,43 @@ def teleprompter_on(port, timeout=1.5):
         return False
 
 
+# netstat 的 LISTENING 行，例如：  TCP    127.0.0.1:8765    0.0.0.0:0    LISTENING
+_LISTEN_RE = re.compile(r'^\s*TCP\s+\S+:(\d+)\s+\S+\s+LISTENING', re.I)
+
+
+def _listening_ports():
+    """一次 netstat 拿到本机所有 LISTENING 端口；拿不到返回 None（调用方退回逐个探测）。
+
+    为什么需要它：Windows 上连一个**没人监听**的本地端口不会立刻被拒绝，而是等到超时
+    —— 实测裸 socket.connect 也要等满 1.5s（是防火墙丢包，不是 RST）。
+    候选端口有 5 个（8765~8769），running_backend() 每个都发一次 HTTP，
+    光白等就是 7.5 秒 —— 这正是「后端就绪 21.7 秒」里最大的一块：
+    实测拆解 = import 1.0 + 空等 7.5 + 模型 4.0 + 预热识别 3.8 + 建索引 1.0 + 答题预热 3.7。
+    netstat -an 只要 0.04 秒，比这划算得多。
+    """
+    try:
+        out = subprocess.run(['netstat', '-an'], capture_output=True, text=True,
+                             encoding='utf-8', errors='replace', timeout=5).stdout or ''
+    except Exception:
+        return None                      # 拿不到就按老办法逐个探，行为不变
+    live = set()
+    for line in out.splitlines():
+        m = _LISTEN_RE.match(line)
+        if m:
+            live.add(int(m.group(1)))
+    return live
+
+
 def running_backend():
-    """扫一遍候选端口，返回已经在跑的提词器后端端口（没有则 None）。"""
-    for p in PORTS:
+    """扫一遍候选端口，返回已经在跑的提词器后端端口（没有则 None）。
+
+    先用 netstat 过滤：只对真的有人在监听的端口发 HTTP。空端口连上去要等满超时，
+    5 个候选端口就是 7.5 秒白等（见 _listening_ports）。
+    netstat 拿不到时退回原来的逐个探测 —— 慢，但不会漏判。
+    """
+    live = _listening_ports()
+    cand = PORTS if live is None else [p for p in PORTS if p in live]
+    for p in cand:
         if teleprompter_on(p):
             return p
     return None
@@ -534,14 +577,30 @@ def capture_forever():
 
 def boot():
     emit({'type': 'status', 'stage': 'loading_model'})
+
+    # 分段计时：启动慢的时候不用猜是哪一段。只打日志，不影响任何流程。
+    # 加这个是因为「后端就绪 21.6 秒」长期拆不出来 —— 已知模型 4.6s、预热 4.5s、
+    # 建索引 1s，剩下的十几秒不知道在哪。
+    _t0 = _T_PROC
+    def _boot(label):
+        try:
+            print('[boot] %-12s %5.1fs' % (label, time.time() - _t0), flush=True)
+        except Exception:
+            pass                      # 无控制台的 exe 里 stdout 是 None
+
+    _boot('import+uvicorn')      # 这一行之前的都算解释器启动与模块导入
     cleanup_tmp()
+    _boot('cleanup')
     asr = SenseVoiceASR(MODEL_DIR)
+    _boot('模型加载')
     emit({'type': 'status', 'stage': 'warming_up'})
     w = asr.warmup()
+    _boot('预热识别')
     STATE['asr'] = asr
     emit({'type': 'status', 'stage': 'indexing'})
     from knowledge import build
     _, chunks = build()
+    _boot('建索引')
     # 顺手把答题链路的冷启动开销挪到启动阶段：词表（jieba posseg）和题库 BM25
     # 都是首次调用才加载。不预热的话，本场第一题要多花约 1 秒 —— 实测会让
     # 首字看门狗误报一次"网络慢"。
@@ -555,7 +614,9 @@ def boot():
         A.warmup()                      # DNS + TLS 握手也挪到启动阶段（首题省 2~3 秒）
     except Exception as e:
         crash('warm_answer', e)
+    _boot('答题链路预热')
     STATE['ready'] = True
+    _boot('★ 就绪（/healthz 开始报 ready）')
     emit({'type': 'status', 'stage': 'ready', 'loadS': round(asr.load_s, 1),
           'warmupS': round(w, 1), 'chunks': len(chunks), 'port': STATE['port']})
     capture_forever()
