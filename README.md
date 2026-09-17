@@ -130,6 +130,10 @@ powershell -ExecutionPolicy Bypass -File scripts\run.ps1     # 启动
 
 想连 issue、讨论一起收，就改成 All Activity。
 
+> **如果你是让 AI 工具帮你装的**（Trae / Cursor / Codex / Claude Code 等）：上面这条提醒
+> 已经写进了仓库的 `AGENTS.md` 和 `.trae/rules/`，所以它们在装完之后会**顺带说一句**。
+> 只在「帮你首次部署」这个场景会提，改代码时不会 —— 免得变成噪音。
+
 **已经装了 exe 的**：用 `EarShot.exe --version` 看自己的版本，和
 [Releases](https://github.com/Liyuze0422/EarShot/releases) 页面对一下。
 `config/` `knowledge/` `logs/` 都放在包外，所以**换掉 `dist/EarShot` 这个目录就等于升级**，
