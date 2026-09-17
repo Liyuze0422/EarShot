@@ -7,6 +7,7 @@
 本地语音识别 + 本地检索 + LLM 改写，全部跑在你自己的 Windows 机器上
 
 [![CI](https://github.com/Liyuze0422/EarShot/actions/workflows/ci.yml/badge.svg)](https://github.com/Liyuze0422/EarShot/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Liyuze0422/EarShot?label=release)](https://github.com/Liyuze0422/EarShot/releases)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)
