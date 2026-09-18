@@ -48,3 +48,15 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install "pytest>=8.0"
       - run: pytest -q tests/test_repo_hygiene.py
+
+  lock-check:
+    # 依赖锁定门禁：改了 requirements.txt 却没重生成 requirements.lock.txt，这里会红。
+    # 装依赖时用 --require-hashes，任何一个包的内容和官方 sha256 对不上就拒绝安装。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 锁定文件与 requirements.txt 一致性
+        run: python tools/check_lock.py

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """从 ModelScope 下载 SenseVoiceSmall ONNX(int8) 到 models/ 目录，纯标准库实现。"""
+import hashlib
 import os
 import sys
 import json
@@ -24,6 +25,49 @@ MIN_BYTES = {
     'config.yaml': 500,
     'configuration.json': 10,
 }
+# 每个文件的 sha256 —— 2026-09-18 从本机已经跑通的模型目录实测得到。
+# 有了它：上游仓库被换包、镜像被投毒、中间人替换，都会在下载完的那一刻被拦下并删掉半个文件，
+# 而不是把"能加载但内容不对"的权重喂给 ASR。换模型版本时这几个值必须一起更新。
+SHA256 = {
+    'model_quant.onnx': '21dc965f689a78d1604717bf561e40d5a236087c85a95584567835750549e822',
+    'tokens.json': 'a2594fc1474e78973149cba8cd1f603ebed8c39c7decb470631f66e70ce58e97',
+    'am.mvn': '29b3c740a2c0cfc6b308126d31d7f265fa2be74f3bb095cd2f143ea970896ae5',
+    'config.yaml': 'f71e239ba36705564b5bf2d2ffd07eece07b8e3f2bbf6d2c99d8df856339ac19',
+    'configuration.json': 'c57f6a580d63f7465c6a22ba95847aee05a1ae1181f5abddffb943d9febda061',
+    # 这个从另一个仓库（iic/SenseVoiceSmall）取，同样是可被换包的入口，一起锁
+    'chn_jpn_yue_eng_ko_spectok.bpe.model':
+        'aa87f86064c3730d799ddf7af3c04659151102cba548bce325cf06ba4da4e6a8',
+}
+
+
+def sha256_of(path):
+    h = hashlib.sha256()
+    with open(path, 'rb') as fp:
+        while True:
+            block = fp.read(1 << 20)
+            if not block:
+                break
+            h.update(block)
+    return h.hexdigest()
+
+
+def verify(path, name):
+    """核对 sha256；对不上就删掉文件并抛错（宁可装不上，也别用被换过的权重）。"""
+    want = SHA256.get(name)
+    if not want:
+        return
+    got = sha256_of(path)
+    if got != want:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        raise RuntimeError(
+            '%s 的 sha256 对不上，文件已删除。\n  期望 %s\n  实际 %s\n'
+            '上游仓库可能被替换过 —— 先别用，去 ModelScope 官方页面核对。'
+            % (name, want, got))
+
+
 # 第 6 个文件是分词模型，它不在 onnx 仓库里，少了这个文件 funasr_onnx 建模型时会直接失败，
 # 而 Python 侧 os.path.exists 看上去一切正常 —— 所以单独从一个仓库补。
 BPE_REPO = 'iic/SenseVoiceSmall'
@@ -50,6 +94,7 @@ def download(name, repo=None):
             sys.stdout.flush()
     dt = time.time() - t0
     print(f'\r  {name}: {done/2**20:.1f} MB in {dt:.1f}s  ({done/2**20/max(dt,0.01):.1f} MB/s)      ')
+    verify(out, name)
     return out
 
 if __name__ == '__main__':

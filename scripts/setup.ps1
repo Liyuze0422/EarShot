@@ -12,7 +12,7 @@
     0. 检查仓库路径是否纯英文（含中文时 ASR 模型必然加载失败，先拦下来）
     1. 找 Python 3.11 / 3.12（64 位）
     2. 建 .venv
-    3. 装依赖（requirements.txt；国内可加 -Mirror）
+    3. 装依赖（优先用 requirements.lock.txt 强制校验每个包的 sha256；国内可加 -Mirror）
     4. 下载 SenseVoiceSmall ONNX int8 模型（约 230MB，ModelScope）
     5. 生成 config 配置模板与 knowledge 示例材料
     6. 跑 tools/preflight.py 全链路自检
@@ -29,6 +29,7 @@
     -SkipDeps          跳过依赖安装（你自己有办法管依赖时）
     -SkipPreflight     跳过最后的自检
     -Fast              自检用 --fast（跳过 ASR 识别与浮窗自检，约 20 秒）
+    -NoLock            不用锁定文件（跳过哈希校验，退回 requirements.txt）
     -PythonExe <path>  指定解释器（默认自动找 py -3.12 / py -3.11 / python）
 #>
 [CmdletBinding()]
@@ -39,6 +40,7 @@ param(
     [switch]$SkipDeps,
     [switch]$SkipPreflight,
     [switch]$Fast,
+    [switch]$NoLock,
     [string]$PythonExe = ''
 )
 
@@ -192,7 +194,23 @@ if ($SkipDeps) {
     Note '升级 pip ...'
     & $VenvPy @('-m', 'pip', 'install', '--disable-pip-version-check', '--upgrade', 'pip') | Out-Null
 
-    if (Test-Path $req) {
+    $lock = Join-Path $RepoRoot 'requirements.lock.txt'
+    if ((Test-Path $lock) -and -not $NoLock) {
+        # 优先用带哈希的锁定文件：每个包都对着 PyPI 官方的 sha256 校验。
+        # 镜像被投毒或上游换了包，安装会当场失败，而不是"装个差不多的版本"糊过去。
+        # 想跳过校验（例如自己要换版本）：加 -NoLock
+        if ($IndexUrl) { Note "pip install -r requirements.lock.txt  (强制哈希校验；源: $IndexUrl)" }
+        else { Note 'pip install -r requirements.lock.txt  (强制哈希校验；默认源)' }
+        & $VenvPy @pipArgs @('-r', $lock)
+        if ($LASTEXITCODE -ne 0) {
+            Die '锁定依赖安装失败（哈希校验没过，或网络中断）' @"
+两种可能：
+  · 下载到的包和锁文件里记的 sha256 对不上 —— 换一个源重试，仍然对不上就别装（见 docs 的供应链说明）
+  · 只是网络/镜像不稳 —— 加 -Mirror 或 -IndexUrl 换源重试
+确实想跳过校验（自己管依赖）：同一条命令加 -NoLock
+"@
+        }
+    } elseif (Test-Path $req) {
         if ($IndexUrl) { Note "pip install -r requirements.txt  (源: $IndexUrl)" }
         else { Note 'pip install -r requirements.txt  (默认源)' }
         & $VenvPy @pipArgs @('-r', $req)
