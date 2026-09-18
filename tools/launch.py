@@ -406,6 +406,32 @@ def run_library():
     return True, d.get('profile', '')
 
 
+def apply_pending_update():
+    """把上一次界面上点过的更新装上。装了返回 True（调用方应当直接退出）。
+
+    **只在启动的最前面调**：这一刻程序还没起来，exe / dll 都没被占用，批处理才换得动文件。
+    失败一律返回 False 走正常启动 —— 一次装不上的更新，绝不该让用户连提词器都开不了。
+    """
+    try:
+        sys.path.insert(0, os.path.join(CODE, 'server'))
+        import update as U
+        pend = U.read_pending()
+        if not pend:
+            return False
+        say('待应用的更新 %s，正在安装…' % (pend.get('version') or ''))
+        U.launch_apply(pend['bat'], pend['args'])
+        # 记号先清掉再退出：批处理等一下会替换文件，但**不会**去动 logs 里的记号。
+        # 不清的话下次启动又会装一遍，成了循环。
+        U.clear_pending()
+        return True
+    except Exception as e:
+        try:
+            say('应用更新失败（不影响使用）：%s' % e)
+        except Exception:
+            pass
+        return False
+
+
 def main():
     # 打包后同一个 exe 分饰多角，--role / --run 由 child_argv() 传进来（必须最先判断）
     target, rest = dispatch_argv()
@@ -440,6 +466,12 @@ def main():
 
     if a.stop:
         return stop_all()
+
+    # 上次在界面上点过「立即更新」：文件已经备在 logs/update_staging 里，
+    # 现在程序还没起来，正是换文件的时机 —— 交给那个批处理，然后本进程退出，
+    # 由批处理把新版本拉起来。用户看到的只是「重新双击了一下，版本就变了」。
+    if not os.environ.get('TP_SKIP_UPDATE') and apply_pending_update():
+        return 0
 
     # 启动前先选库：双击「启动提词器.bat」就是走这条路。
     # --no-library / TP_NO_LIBRARY=1 跳过（tools/switch.py 重启后端时用，不能弹窗打断）。

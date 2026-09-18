@@ -103,6 +103,8 @@ QLabel#title { font-size:17px; font-weight:600; color:#ffffff; }
 QLabel#sub   { color:#7b818c; font-size:12px; }
 QLabel#stat  { color:#8f96a3; font-size:12px; }
 QLabel#sign  { color:#4c515a; font-size:11px; }
+QPushButton#upd { background:#2a3550; border:1px solid #3d5486; border-radius:6px;
+                  color:#9dc0ff; font-size:12px; padding:3px 10px; }
 QLabel#err   { color:#ff9a9a; font-size:12px; }
 QListWidget  { background:#232429; border:1px solid #303239; border-radius:8px; padding:5px; outline:0; }
 QListWidget::item { padding:9px 10px; border-radius:6px; color:#c9cdd6; }
@@ -280,6 +282,66 @@ def collect_dir(d):
             if f.lower().endswith(DOC_EXT):
                 out.append(os.path.join(dp, f))
     return out
+
+
+# -- 后台查更新 / 下载更新 ---------------------------------------------
+# 提示只出现在这个「选知识库」窗口，**绝不放到浮窗上**：浮窗是面试时用的，
+# 面试进行到一半弹一句「要不要更新」是灾难。选库窗口每次启动必经，是唯一合适的落点。
+class UpdateCheck(QThread):
+    """查有没有新版本。失败静默 —— 网络不通是常态，不该在选库窗口上报警。"""
+
+    done = pyqtSignal(dict)
+
+    def run(self):
+        try:
+            import update as _u
+            self.done.emit(_u.check())
+        except Exception as e:
+            self.done.emit({'ok': False, 'error': str(e)})
+
+
+class UpdateApply(QThread):
+    """下载 + 校验 + 备好替换脚本。**不重启、也不动安装目录** —— 那些要等程序退出。"""
+
+    step = pyqtSignal(str)
+    done = pyqtSignal(dict)
+
+    def run(self):
+        try:
+            import update as _u
+            r = _u.check(True)
+            if not r.get('ok'):
+                self.done.emit({'ok': False, 'error': r.get('error') or '查询失败'})
+                return
+            if not r.get('has_update'):
+                self.done.emit({'ok': False, 'error': '已经是最新版本'})
+                return
+            p = _u.pick_patch(r)
+            if not p:
+                self.done.emit({'ok': False, 'error': '这个版本没有可用的更新包'})
+                return
+            self.step.emit('正在下载更新包（%.1f MB）…' % (p[2] / 1048576))
+            st = _u.stage(p[1])
+            if not st.get('ok'):
+                self.done.emit(st)
+                return
+            bat, args = _u.write_apply_script(st, r['latest'])
+            _u.write_pending(bat, args, r['latest'])
+            st.update({'bat': bat, 'args': args, 'version': r['latest']})
+            self.done.emit(st)
+        except Exception as e:
+            self.done.emit({'ok': False, 'error': str(e)})
+
+
+def open_url(url):
+    """在系统浏览器里打开一个网址（软件里不内嵌浏览器，省一份依赖）。"""
+    if not url:
+        return
+    try:
+        import webbrowser
+        webbrowser.open(url)
+    except Exception:
+        pass
 
 
 # ── 后台准备：配置 + 题库 + 扩展词 ────────────────────────────────────
@@ -552,10 +614,94 @@ class LibraryWindow(QWidget):
         foot.addWidget(self.go)
         v.addLayout(foot)
 
+        # 更新提示：默认藏着，查到新版本才出现
+        self.upd = QPushButton('')
+        self.upd.setObjectName('upd')
+        self.upd.hide()
+        self.upd.clicked.connect(self.on_update_click)
+        v.addWidget(self.upd, 0, Qt.AlignmentFlag.AlignRight)
+
         v.addWidget(QLabel('Liyuze0422 制作    v%s' % _VERSION, objectName='sign'),
                     0, Qt.AlignmentFlag.AlignRight)
 
+        self._upd_info = {}
+        self._upd_threads = []
         self.reload()
+        # 窗口先画出来再查 —— 查更新最长要等 6 秒，不能让它拖慢开机
+        QTimer.singleShot(700, self.check_update)
+
+    # -- 更新 ------------------------------------------------------------
+    def check_update(self):
+        t = UpdateCheck()
+        t.done.connect(self.on_update_result)
+        t.finished.connect(self._drop_thread)
+        self._upd_threads.append(t)
+        t.start()
+
+    def _drop_thread(self, t=None):
+        for x in list(self._upd_threads):
+            if not x.isRunning():
+                self._upd_threads.remove(x)
+
+    def on_update_result(self, r):
+        if not r.get('has_update'):
+            return
+        self._upd_info = r
+        self.upd.setText('有新版本 %s（当前 %s）' % (r.get('latest'), r.get('current')))
+        self.upd.show()
+
+    def on_update_click(self):
+        r = self._upd_info
+        if not r:
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle('新版本 %s' % r.get('latest'))
+        dlg.setStyleSheet(QSS)
+        dlg.resize(600, 430)
+        v = QVBoxLayout(dlg)
+        v.addWidget(QLabel('当前 %s -> 最新 %s（%s 发布）'
+                           % (r.get('current'), r.get('latest'), r.get('published') or '?'),
+                           objectName='sub'))
+        body = QTextEdit()
+        body.setReadOnly(True)
+        body.setPlainText(r.get('notes') or '（这一版没写更新说明）')
+        v.addWidget(body, 1)
+        row = QHBoxLayout()
+        if r.get('can_self_update'):
+            do = QPushButton('立即更新')
+            do.clicked.connect(lambda: (dlg.accept(), self.on_do_update()))
+            row.addWidget(do)
+        page = QPushButton('打开下载页')
+        page.clicked.connect(lambda: open_url(r.get('url') or ''))
+        row.addWidget(page)
+        row.addStretch(1)
+        close = QPushButton('稍后')
+        close.clicked.connect(dlg.accept)
+        row.addWidget(close)
+        v.addLayout(row)
+        dlg.exec()
+
+    def on_do_update(self):
+        self.bar.setRange(0, 0)
+        self.bar.show()
+        self.stat.setText('正在准备更新…')
+        t = UpdateApply()
+        t.step.connect(self.stat.setText)
+        t.done.connect(self.on_update_applied)
+        t.finished.connect(self._drop_thread)
+        self._upd_threads.append(t)
+        t.start()
+
+    def on_update_applied(self, r):
+        self.bar.hide()
+        if not r.get('ok'):
+            self.stat.setText('更新没成功：%s（不影响继续用）' % r.get('error'))
+            return
+        self.stat.setText('更新已就绪（%d 个文件，%.1f MB）。关掉提词器再重新启动一次，'
+                          '新版本会在启动时自动装上。'
+                          % (len(r.get('files') or []), (r.get('bytes') or 0) / 1048576))
+        self.upd.setText('已就绪：重启后升级到 %s' % r.get('version'))
+        self.upd.show()
 
     def reload(self):
         self.list.clear()

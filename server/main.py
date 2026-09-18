@@ -669,6 +669,75 @@ async def healthz():
             'device': STATE.get('device', ''), 'audio_restarts': STATE['audio_restarts']}
 
 
+# ---------------------------------------------------------------- 更新
+
+@app.get('/update/check')
+async def update_check(force: int = 0):
+    """查有没有新版本。**永远返回 200**。
+
+    网络不通是国内访问 GitHub 的常态，不该因为一次查询失败在界面上弹一个错误框 ——
+    失败的语义由返回里的 ok 字段表达，界面按它决定显示什么。
+
+    force=1 绕过 6 小时缓存（用户手点「检查更新」时用）。
+    """
+    import update as U
+    r = await asyncio.to_thread(U.check, bool(force))
+    p = U.pick_patch(r) if r.get('has_update') else None
+    r['patch'] = ({'name': p[0], 'size': p[2], 'diff': p[3]} if p else None)
+    r['local_manifest'] = bool(r.get('local_manifest'))
+    r.pop('assets', None)          # 一堆下载地址，界面用不上
+    return r
+
+
+@app.post('/update/apply')
+async def update_apply():
+    """下载差分包 → 校验 → 把替换脚本准备好。**这一步不重启、不改动安装目录。**
+
+    真正替换发生在主进程退出之后（Windows 锁着正在运行的 exe，谁也覆盖不了它）。
+    下载放在线程里跑：urllib 是同步的，直接 await 会把事件循环堵死，
+    在那几十秒里浮窗会连心跳都收不到。
+    """
+    import update as U
+    r = await asyncio.to_thread(U.check, True)
+    if not r.get('ok'):
+        return {'ok': False, 'error': r.get('error') or '查询失败'}
+    if not r.get('has_update'):
+        return {'ok': False, 'error': '已经是最新版本 %s' % r.get('current')}
+    p = U.pick_patch(r)
+    if not p:
+        return {'ok': False, 'error': '这个版本没有可用的更新包'}
+    st = await asyncio.to_thread(U.stage, p[1])
+    if not st.get('ok'):
+        return st
+    try:
+        bat, args = U.write_apply_script(st, r['latest'])
+    except Exception as e:
+        return {'ok': False, 'error': '准备替换脚本失败：%s' % e}
+    # 留个记号：替换要等程序没在跑的时候才做得成，交给下次启动的第一件事
+    U.write_pending(bat, args, r['latest'])
+    STATE['update_pending'] = {'bat': bat, 'args': args, 'version': r['latest'],
+                               'files': st['files'], 'deletes': st['deletes']}
+    return {'ok': True, 'version': r['latest'], 'bytes': st['bytes'], 'diff': p[3],
+            'files': len(st['files']), 'deletes': len(st['deletes'])}
+
+
+@app.post('/update/restart')
+async def update_restart():
+    """启动替换脚本，然后本进程退出。
+
+    这里用的是 os._exit 而不是优雅退出：必须**立刻**放掉对 exe / dll 的占用，
+    否则批处理那边的 xcopy 会写不进去。音频线程、ASR 会话都不需要收尾 ——
+    下次启动会重新建。先回完这个 HTTP 响应再退，否则界面只会看到一个连接被掐断。
+    """
+    pend = STATE.get('update_pending')
+    if not pend:
+        return {'ok': False, 'error': '没有待应用的更新'}
+    import update as U
+    U.launch_apply(pend['bat'], pend['args'])
+    asyncio.get_event_loop().call_later(1.5, lambda: os._exit(0))
+    return {'ok': True, 'version': pend['version']}
+
+
 @app.websocket('/ws')
 async def ws_endpoint(ws: WebSocket):
     await ws.accept()
