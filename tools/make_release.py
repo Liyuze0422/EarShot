@@ -164,9 +164,14 @@ def main():
 
     if a.full:
         fz = os.path.join(out, 'EarShot-v%s-win64-full.zip' % a.version)
+        # 全量包必须**带上包内清单**：用户装完 0.9.20 才有基线，下一次升级才走得成差分。
+        # 清单本身不在 files 里（它的哈希无法自指），所以这里单独补进去。
+        names = sorted(files)
+        if a.embed:
+            names.append(rel(os.path.join('_internal', MANIFEST_NAME)))
         print('全量包（%s，慢）…' % human(total))
         t0 = time.time()
-        zip_files(root, sorted(files), fz, level=1)
+        zip_files(root, names, fz, level=1)
         print('  全量包 -> %s (%s, 用时 %.0fs)'
               % (os.path.basename(fz), human(os.path.getsize(fz)), time.time() - t0))
 
