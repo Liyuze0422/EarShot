@@ -149,8 +149,15 @@ def proc_names():
 
     打包后跑的是 EarShot.exe，不再是 python.exe/pythonw.exe ——
     只认 python 名字会一个进程都找不到（表现为"停不掉"和"开出两个浮窗"）。
+
+    2026-09-20 修正：EarShot.exe 必须**无条件**认，不能只在 frozen 时认。
+    实测踩到的场景：用户双击的是打包版 exe（命令行 EarShot.exe --role server），
+    后来用源码版 run.ps1 --stop 想关掉 —— 那时 FROZEN=False、名字表里只有 python，
+    于是报"已停掉 0 个提词器进程"却仍删掉了 .runtime_port：进程和采集都还在，
+    端口文件却没了，下次启动会误判"没在跑"而再起一个后端（端口漂到 8766）。
+    命令行那层匹配本来就认 --role server/--role ui，名字这层不该把它挡在外面。
     """
-    names = ['python.exe', 'pythonw.exe']
+    names = ['python.exe', 'pythonw.exe', 'EarShot.exe']
     if FROZEN:
         me = os.path.basename(sys.executable)
         if me.lower() not in [n.lower() for n in names]:

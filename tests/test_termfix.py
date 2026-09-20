@@ -39,6 +39,8 @@ def _fake_targets(monkeypatch):
     monkeypatch.setitem(termfix._CACHE, 'index', index)
     monkeypatch.setitem(termfix._CACHE, 'known', set(KNOWN))
     monkeypatch.setitem(termfix._CACHE, 'all', set(KNOWN) | set(VOCAB))
+    # 中文目标词单独一路（按长度分桶），同样用假词表避开私有语料
+    monkeypatch.setitem(termfix._CACHE, 'cn', {2: ['飞书', '字节', '豆包']})
 
 
 @pytest.mark.parametrize('heard, want', [
@@ -98,3 +100,35 @@ def test_cap_scales_with_length():
     assert termfix._cap('read') == 1        # 短词保守：read 不该被纠成 redis
     assert termfix._cap('kubbernet') == 2
     assert termfix._cap('kubernetesx') == 3
+
+
+# ── 中文错字（2026-09-20 真实面试）───────────────────────────────────────
+# 那场里面试官说的是「飞书」，ASR 全听成了「飞猪」，而且错字直接进了答案文本
+# （屏幕上写的是「没去动飞猪那套基座」）—— 照念出来是会尴尬的。
+# 原来的 termfix 只按 _ASCII 找 token，中文这条路完全没接。
+
+
+def test_chinese_typo_is_corrected():
+    got, fixes = termfix.correct('用的是飞猪那套聊天软件')
+    assert ('飞猪', '飞书') in fixes
+    assert '飞书' in got and '飞猪' not in got
+
+
+def test_chinese_typo_with_different_first_char():
+    """错字连首字都错（「字节」听成「自节」）—— 所以不能按首字分桶查。"""
+    got, fixes = termfix.correct('围绕自节的生态做交付')
+    assert ('自节', '字节') in fixes
+
+
+def test_chinese_common_words_are_never_touched():
+    """判据必须是「jieba 词典里查不到」，不能是「不在 known_terms」。
+
+    known_terms 只装术语，常用词本来就不在里面。踩过：拿它当判据时，
+    同一批 127 条真实转写里有 35 条被误纠（公司→公式、简历→日历、
+    客户→门户、交流→交付）—— 命中率看着漂亮，内容全毁了。
+    """
+    for t in ['那你过去的工作是相对实习喽', '我找一下简历', '上家公司做乙方服务',
+              '最后一公里的部署', '不交社保', '一月份开始实习', '过程中的实际问题']:
+        got, fixes = termfix.correct(t)
+        assert not fixes, (t, fixes)
+        assert got == t

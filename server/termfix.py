@@ -29,6 +29,10 @@ import re
 __all__ = ['correct', 'targets', 'reset_cache']
 
 _ASCII = re.compile(r'[A-Za-z][A-Za-z0-9._\-]*')
+_CJK = re.compile(r'[\u4e00-\u9fff]+')
+
+# 语气词：以它们开头的两字串是「音节 + 残字」（「呃场」），不是被听错的术语
+_PARTICLE = set('呃嗯啊哦哎诶呀咳唉')
 
 # 长度 < 这个值的 token 一律不动 —— "o"(Ollama)、"v"(Vue/Faiss)、"ra"(RAG)
 # 这类短 token 纠错的假阳性远高于收益。
@@ -68,6 +72,10 @@ def _build():
         v = {str(w).lower() for w in answer._vocab()}
     except Exception:
         pass
+    # 中文词单独留一份**过滤前**的：下面那道 MIN_LEN=4 是给英文 token 设的
+    # （"o"/"ra" 这类短 token 纠了只会更错），但「飞书」「字节」这种两字中文词
+    # 会被它一起挡掉 —— 而中文恰恰只有 2~4 字。
+    _kn_raw = set(kn)
     kn = {w for w in kn if len(w) >= MIN_LEN and w not in _STOP}
     v = {w for w in v - kn if len(w) >= MIN_LEN and w not in _STOP}
     by = {}
@@ -78,6 +86,16 @@ def _build():
     _CACHE['index'] = by
     _CACHE['known'] = kn
     _CACHE['all'] = kn | v
+    # 中文目标词：ASR 会把「飞书」听成「飞猪」—— 同长度、单字替换（编辑距离 1）。
+    # 英文那套按 token 纠，完全够不到中文（2026-09-20 真实面试里这条错误直接进了答案文本）。
+    # 只收**用户手写词表**（trust 2），不收语料词表：语料里「飞」打头的词有一串
+    # （飞机/飞过/起飞…），只按编辑距离会并列成一堆候选、只能放弃；而手写词表是用户
+    # 亲口指定的目标词，命中它才敢下判断。所以这一层的能力边界 = 用户词表里写了什么。
+    cn = {}
+    for w in _kn_raw:
+        if 2 <= len(w) <= 4 and _CJK.fullmatch(w):
+            cn.setdefault(len(w), []).append(w)
+    _CACHE['cn'] = cn
 
 
 def reset_cache():
@@ -147,12 +165,62 @@ def _best(word):
     return None if (best is None or tie) else best[1]
 
 
+def _cn_edits(text):
+    """中文同长度单字替换纠错，返回 [(start, end, 正确词, 听成的词)]。
+
+    判据（三个都满足才纠，宁可不纠）：
+      1. **起点落在 jieba 的词边界上**。跨边界的假子串不可能是 ASR 错词 ——
+         「其实我我理解」里切出来的「实我」会把 jieba 分词边界当成窗口起点试，
+         一试就撞上「实施」。只从边界起步，这类假子串根本不会被尝试。
+      2. **源词 jieba 词典里查不到（词频 0）**。这是最关键的防线：
+         「飞猪/自节/豆报」的词频都是 0，而「公司(45604)/工作(66367)/实习(1023)」
+         这些正常词都有词频。先前用「不在 known ∪ 语料词表」当判据是错的 ——
+         语料词表也被 MIN_LEN=4 砍过，两字常用词根本不在里面，实测 127 条误纠 35 条
+         （公司→公式、简历→日历、客户→门户）。
+      3. **目标词在用户手写词表里、且 jieba 认识它**（词频 > 0）。
+
+    为什么不按首字分桶：错字可能连首字都是错的（「字节」被听成「自节」），
+    按首字查会直接漏掉。known_terms 只有一两百条，按长度全量扫足够快。
+    """
+    cn = _CACHE.get('cn') or {}
+    if not cn:
+        return []
+    import jieba
+    FREQ = jieba.dt.FREQ
+    bounds, pos = [], 0
+    for t in jieba.lcut(text):
+        bounds.append(pos)
+        pos += len(t)
+    out = []
+    for i in bounds:
+        hit = None
+        # 只试 2 字窗口。3/4 字窗口在真实数据上是净亏的：「工作是」=「工作」+「是」
+        # 这种跨词拼接会整片撞上「工作台」（实测 127 条里 4 条误纠全是它）。
+        # 而 2 字错词（飞猪/自节/豆报）才是中文 ASR 的主战场。
+        for ln in (2,):
+            sub = text[i:i + ln]
+            if len(sub) < ln or not _CJK.fullmatch(sub):
+                continue
+            if FREQ.get(sub, 0):
+                continue                         # 正常词 → 不试
+            if sub[0] in _PARTICLE:
+                continue                         # 语气词开头（「呃场」）不可能是术语错字
+            cands = [w for w in cn.get(ln, ())
+                     if w != sub and FREQ.get(w, 0) and _ed(sub, w, 1) == 1]
+            if len(cands) == 1:                  # 候选唯一才敢纠
+                hit = (sub, cands[0])
+                break
+        if hit:
+            out.append((i, i + len(hit[0]), hit[1], hit[0]))
+    return out
+
+
 def correct(text):
     """对一段转写做保守纠错。返回 (新文本, [(听成的, 应该是的)])。"""
     if not text:
         return text, []
     tgt = targets()
-    if not tgt:
+    if not tgt and not (_CACHE.get('cn') or {}):
         return text, []
     spans = [(m.start(), m.end(), m.group(0)) for m in _ASCII.finditer(text)]
     n = len(spans)
@@ -207,6 +275,14 @@ def correct(text):
         if hit:
             edits.append((s, e, hit))
             fixes.append((w, hit))
+
+    # 第三步：中文单字替换纠错（「飞书」被听成「飞猪」）。
+    # 和英文改动做重叠检查 —— 两边都改同一段会互相覆盖。
+    for s, e, rep, heard in _cn_edits(text):
+        if any(s < x[1] and x[0] < e for x in edits):
+            continue
+        edits.append((s, e, rep))
+        fixes.append((heard, rep))
 
     if not edits:
         return text, []
