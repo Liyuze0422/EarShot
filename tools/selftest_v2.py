@@ -30,9 +30,13 @@ def speak(text):
 print('='*66)
 print('步骤 1  回环采集 + TTS 朗读')
 print('='*66)
+from asr_engine import pick_loopback            # noqa: E402  只在回环设备里挑（0.9.22）
 spk = sc.default_speaker()
-mic = sc.get_microphone(id=str(spk.name), include_loopback=True)
-print('  回环设备:', mic.name)
+mic = pick_loopback(sc.all_microphones(include_loopback=True),
+                    speaker_id=getattr(spk, 'id', ''), speaker_name=spk.name)
+if mic is None:
+    raise SystemExit('✗ 找不到「%s」的回环设备，先跑 python tools/check_audio.py' % spk.name)
+print('  回环设备:', mic.name, '(isloopback=%s)' % mic.isloopback)
 print('  朗读文本:', TEXT)
 frames = []
 t = threading.Thread(target=speak, args=(TEXT,), daemon=True)

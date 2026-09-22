@@ -25,13 +25,66 @@ BLOCK_MS = 20
 BLOCK = SR * BLOCK_MS // 1000
 
 
+_WINDOWS_INDEX_RE = re.compile(r'(^|\()\s*\d+-\s*')   # 「2- USB Audio Device」「耳机 (2- XXX)」里的序号
+
+
+def _norm_name(s):
+    """设备名归一化：去掉 Windows 为重复设备加的序号前缀，再统一小写。"""
+    return _WINDOWS_INDEX_RE.sub(r'\1', (s or '').strip()).lower()
+
+
+def pick_loopback(devices, speaker_id=None, speaker_name=None):
+    """从采集设备列表里挑出「默认播放设备」对应的那个**回环**设备。
+
+    ★ 为什么不能直接把设备名交给 `sc.get_microphone(id=spk.name, include_loopback=True)`：
+
+    soundcard 的 `_match_device()` 是「先按 id 精确匹配，再按**名字**匹配」，而
+    `all_microphones(include_loopback=True)` 返回的顺序是「**先全部回环、再全部真麦克风**」，
+    它拿名字做字典键（后写入的**真麦克风会把同名的回环设备覆盖掉**）——
+    于是按名字查到的是麦克风，不是回环。
+
+    什么时候会撞名：**蓝牙耳机（免手动 / Hands-Free）在 Windows 上会同时建一个播放端点和一个录音端点，
+    两者的「友好名」一模一样**（例如都叫 "耳机 (XXX Hands-Free AG Audio)"）。这时默认播放设备就是那个渲染端点，
+    按名字去查就会命中它同名的**真麦克风** —— 用户看到的现象是
+    「第一次装好用，提词器只听得见我自己说话，面试官说什么它不知道」。
+
+    所以这里只认 `isloopback=True` 的设备，且**优先按 WASAPI id 匹配**（id 全局唯一，永远不会撞名）。
+    找不到就返回 None，由调用方报错 —— 宁可报错，也绝不偷偷去录用户自己的麦克风。
+    """
+    loops = [d for d in devices if getattr(d, 'isloopback', False)]
+    if speaker_id:
+        for d in loops:
+            if getattr(d, 'id', None) == speaker_id:
+                return d
+    if speaker_name:
+        for d in loops:
+            if getattr(d, 'name', None) == speaker_name:
+                return d
+        # 名字被 Windows 改写过（同一设备插两次会变成 "2- USB Audio Device"）时，
+        # 去掉序号前缀再比一次 —— 仍然只在回环集合里找，不可能落到真麦克风上。
+        want = _norm_name(speaker_name)
+        for d in loops:
+            n = _norm_name(getattr(d, 'name', ''))
+            if n and want and (n == want or n in want or want in n):
+                return d
+    return None
+
+
 class LoopbackCapture:
     """WASAPI 回环采集:拿到的是系统正在播放的音频(会议里=面试官的声音)。"""
     def __init__(self, samplerate=SR):
         self.samplerate = samplerate
         spk = sc.default_speaker()
         self.device_name = spk.name
-        self.mic = sc.get_microphone(id=str(spk.name), include_loopback=True)
+        self.device_id = getattr(spk, 'id', '') or ''
+        self.mic = pick_loopback(sc.all_microphones(include_loopback=True),
+                                 speaker_id=self.device_id, speaker_name=spk.name)
+        if self.mic is None:
+            raise RuntimeError(
+                '取不到「%s」的回环设备 —— 这台机器上没有任何可用的扬声器回环。' % (self.device_name or '?'))
+        if not getattr(self.mic, 'isloopback', False):
+            # 兜底：真走到这儿说明匹配逻辑又坏了 —— 报错，不要静默录用户自己的声音。
+            raise RuntimeError('回环匹配到了真麦克风（%s），已拒绝：提词器绝不能录你自己的声音' % self.mic.name)
 
     def frames(self, stop_event=None):
         with self.mic.recorder(samplerate=self.samplerate, channels=1, blocksize=BLOCK) as rec:
@@ -44,6 +97,17 @@ def default_speaker_name():
     """当前默认播放设备名 —— 面试中插拔耳机/切设备时要能发现。"""
     try:
         return sc.default_speaker().name or ''
+    except Exception:
+        return ''
+
+
+def default_speaker_id():
+    """当前默认播放设备的 WASAPI id —— 判断「换设备了没」要用它，不能用名字。
+
+    蓝牙耳机的播放端点和录音端点常常**同名**，按名字比会漏判（0.9.22 修的就是这类撞名）。
+    """
+    try:
+        return getattr(sc.default_speaker(), 'id', '') or ''
     except Exception:
         return ''
 

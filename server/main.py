@@ -40,7 +40,7 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from asr_engine import (LoopbackCapture, EnergyVAD, SenseVoiceASR, SR,
-                        calibrate_threshold, default_speaker_name)
+                        calibrate_threshold, default_speaker_name, default_speaker_id)
 
 # 分段计时第 1 段：解释器启动 + 全部依赖 import（下一段是 uvicorn 起来之前）。
 try:
@@ -481,9 +481,11 @@ def capture_once(vad_thresh):
         now = time.time()
         if now - last_dev > DEVICE_CHECK_S:
             last_dev = now
-            cur = default_speaker_name()
-            if cur and cap.device_name and cur != cap.device_name:
-                raise RuntimeError('默认播放设备变成 %s（原 %s）' % (cur, cap.device_name))
+            # 比 id 不比名字：蓝牙耳机的播放/录音端点常常同名，名字相同不等于还是同一个设备。
+            cur = default_speaker_id()
+            if cur and cap.device_id and cur != cap.device_id:
+                raise RuntimeError('默认播放设备变成 %s（原 %s）'
+                                   % (default_speaker_name() or cur, cap.device_name or ''))
         if now - last_level > 0.1:
             rms = float(np.sqrt((block.astype('float64') ** 2).mean()))
             emit({'type': 'level', 'rms': round(rms, 4)})

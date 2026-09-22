@@ -125,7 +125,8 @@ def check_loopback_device():
     except Exception as e:
         return 'FAIL', '拿不到回环设备（耳机/扬声器插好了吗？）: %s: %s' % (type(e).__name__, e)
     CTX['cap'] = cap
-    return 'PASS', '默认回环设备: %s  →  server/asr_engine.py LoopbackCapture 可用' % (cap.device_name or '?')
+    return 'PASS', '默认回环设备: %s（isloopback=%s）  →  只会听到系统播放的声音' % (
+        cap.device_name or '?', getattr(cap.mic, 'isloopback', None))
 
 
 # ── 2. 当前有没有声音在放 ─────────────────────────────────────────────

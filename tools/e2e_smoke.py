@@ -76,8 +76,14 @@ def main():
     args = ap.parse_args()
 
     import soundcard as sc
+    sys.path.insert(0, os.path.join(ROOT, 'server'))
+    from asr_engine import pick_loopback          # 只在回环设备里挑，绝不落到真麦克风（0.9.22）
     spk = sc.default_speaker()
-    mic = sc.get_microphone(id=str(spk.name), include_loopback=True)
+    mic = pick_loopback(sc.all_microphones(include_loopback=True),
+                        speaker_id=getattr(spk, 'id', ''), speaker_name=spk.name)
+    if mic is None:
+        print('[音频] ✗ 找不到「%s」的回环设备，先跑 python tools/check_audio.py' % spk.name)
+        return 1
     print(f'[音频] 回环设备: {mic.name}  @{SR}Hz')
 
     asr = None
