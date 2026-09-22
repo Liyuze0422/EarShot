@@ -8,7 +8,27 @@ import urllib.request
 import time
 
 REPO = 'iic/SenseVoiceSmall-onnx'
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _data_root():
+    r"""模型下到哪 —— 必须和 server/settings.py 找模型的目录是同一个。
+
+    源码运行时它就是仓库根（__file__ 往上两级），没问题。
+    打包成 exe 之后两者**不是一回事**：__file__ 在 _internal 里（onedir 的 _MEIPASS，
+    那是**代码**目录），而 server/settings.py 的 _split_roots() 找模型看的是**数据**目录
+    （exe 所在那一层）。照 __file__ 推就会把 230MB 下进 _internal\models\，
+    后端永远不会去看那儿 —— 第一次装的人看到的是「模型目录不存在」，而他明明刚下完。
+
+    启动器用 TP_DATA_ROOT 把数据根传给所有子进程（后端 / 浮窗 / 选库窗口用的是同一个值），
+    这里跟着用同一个，就不会再漂。
+    """
+    env = os.environ.get('TP_DATA_ROOT')
+    if env:
+        return env
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+ROOT = _data_root()
 DEST = os.path.join(ROOT, 'models', 'SenseVoiceSmall-onnx')
 FILES = ['model_quant.onnx', 'tokens.json', 'am.mvn', 'config.yaml', 'configuration.json']
 # 每个文件的最小合理字节数 —— 收尾核对用。

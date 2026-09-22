@@ -96,6 +96,23 @@ AUTO = os.environ.get('TP_LIBRARY_AUTO', '').strip()
 RESULT_FILE = os.path.join(ROOT, '.runtime_profile')
 BANK_DIR = os.path.join(ROOT, '知识库')
 DOC_EXT = ('.md', '.txt', '.markdown', '.docx')
+# ASR 模型必须齐这 6 个文件才加载得起来（tools/download_model.py 的 SHA256 表就是这 6 个）
+MODEL_FILES = ('model_quant.onnx', 'tokens.json', 'am.mvn', 'config.yaml', 'configuration.json',
+               'chn_jpn_yue_eng_ko_spectok.bpe.model')
+
+
+def model_missing():
+    """语音模型还没备好？（打包版不带模型，第一次要下约 230MB）"""
+    try:
+        md = settings.model_dir()
+    except Exception:
+        return True
+    return any(not os.path.exists(os.path.join(md, f)) for f in MODEL_FILES)
+
+
+def _model_progress(line):
+    """下载模型时哪些行值得显示到状态栏（进度是 \r 刷的，python 文本模式会转成换行）。"""
+    return (' MB' in line) or ('%' in line) or line.startswith('下载到') or line.startswith('FAIL')
 
 QSS = '''
 QWidget { background:#1b1c20; color:#d7dae0; font-family:"Microsoft YaHei"; font-size:13px; }
@@ -354,8 +371,11 @@ class Prepare(QThread):
         self.name = name
         self.error = ''
 
-    def _tool(self, script, *args):
-        """跑一个项目脚本，把它的输出当进度回报（题库生成要 40+ 秒）。"""
+    def _tool(self, script, *args, keep=None):
+        """跑一个项目脚本，把它的输出当进度回报（题库生成要 40+ 秒）。
+
+        keep(line) 为真就显示这一行；不传则用「题库/扩展词脚本」的那套过滤。
+        """
         if getattr(sys, 'frozen', False):
             # 打包后没有独立的 python 也没有 .py 文件：让 exe 自己再跑一次，用 --run 分发
             cmd = [sys.executable, '--run',
@@ -380,13 +400,63 @@ class Prepare(QThread):
             line = line.strip()
             if not line:
                 continue
-            if line.startswith('  [') or '块' in line or '生成 ' in line or '合并' in line:
+            if keep is not None:
+                if keep(line):
+                    self.progress.emit(line[:80])
+            elif line.startswith('  [') or '块' in line or '生成 ' in line or '合并' in line:
                 self.progress.emit(line[:80])
         p.wait()
         return p.returncode
 
+    def _ensure_model(self):
+        r"""点「开始」之后的第一件事：确认语音模型在，不在就下。
+
+        为什么要有这一步：**发布包里不含模型**（230MB，见 docs\发布到GitHub.md），
+        原来只有一句「自己跑 tools/download_model.py」写在文档里 ——
+        而双击 exe 的人根本不会去开命令行，他看到的是「选完库、点了开始，然后一直转圈/报错」。
+        接进「开始」的准备流程里，用户只需要等它下完。
+
+        放在最前面：模型是硬依赖（没它后端根本起不来），题库是软依赖（没它只是没有追问预案）。
+        """
+        md = settings.model_dir()
+        try:
+            settings.ensure_ascii(md, 'ASR 模型目录（model_dir）')
+        except RuntimeError:
+            self.error = ('这个文件夹的路径里有中文，语音模型加载会失败。'
+                          '把整个文件夹挪到纯英文路径（例如 C:\\EarShot）再启动。')
+            return False
+        # 密钥：后端没有它也能起（快答线退回题库），但「备题库」这一步要调大模型 ——
+        # 缺密钥时它只会抛一个 traceback，用户看到的是「题库生成失败（exit 1）」这种
+        # 指不到原因的话。所以先把 config\api_key.txt 建出来，并明确告诉他填哪儿。
+        try:
+            settings.api_key()
+        except RuntimeError:
+            kp = settings.api_key_path()
+            try:
+                os.makedirs(os.path.dirname(kp), exist_ok=True)
+                if not os.path.exists(kp):
+                    with open(kp, 'w', encoding='utf-8') as f:
+                        f.write('# 把 DeepSeek 密钥粘在下面这一行（只放密钥本身，不要引号、不要空格）\n'
+                                '# 申请地址：https://platform.deepseek.com\n')
+            except OSError:
+                pass
+            self.error = ('还没有填 DeepSeek 密钥 —— 已经给你建好了 %s，'
+                          '把密钥粘进去（只放密钥本身）再点「开始」。' % kp)
+            return False
+        if not model_missing():
+            return True
+        self.progress.emit('第一次要用：下载语音模型（约 230MB，只下一次）…')
+        rc = self._tool('download_model.py', keep=_model_progress)
+        if rc != 0:
+            self.error = ('语音模型没下完（目录：%s）。联网后重试，'
+                          '或按 docs\\故障排查.md 手动下载。' % md)
+            return False
+        return True
+
     def run(self):
         try:
+            if not self._ensure_model():
+                return
             old = knowledge.active_profile()
             self.progress.emit('写入资料包配置…')
             set_profile(self.name)
@@ -734,8 +804,9 @@ class LibraryWindow(QWidget):
         self.go.setEnabled(bool(n) and self.worker is None)
         if n:
             core = lib_core_docs(n)
-            self.stat.setText('『%s』本库专属 %d 份 + 共用材料 %d 份；开始后先备题库，之后就快了'
-                              % (n, core, lib_all_docs(n) - core))
+            tail = '；第一次会先下语音模型（约 230MB）' if model_missing() else ''
+            self.stat.setText('『%s』本库专属 %d 份 + 共用材料 %d 份；开始后先备题库，之后就快了%s'
+                              % (n, core, lib_all_docs(n) - core, tail))
 
     def on_new(self):
         dlg = NewLibDialog(self)

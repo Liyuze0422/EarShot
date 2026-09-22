@@ -56,6 +56,9 @@ def _data_root():
 
 CODE = _code_root()
 ROOT = _data_root()
+# 同一个进程里跑的脚本（--run tools/download_model.py 这种）也要看到数据根：
+# 它们按 __file__ 推会推到 _MEIPASS（代码目录），而数据在磁盘上那一层才作数。
+os.environ['TP_DATA_ROOT'] = ROOT
 VENV_PY = os.path.join(ROOT, '.venv', 'Scripts', 'python.exe')
 VENV_PYW = os.path.join(ROOT, '.venv', 'Scripts', 'pythonw.exe')
 SERVER = os.path.join(CODE, 'server', 'main.py')
@@ -103,6 +106,12 @@ def dispatch_argv():
             target = argv[i + 1]
             if a == '--role':
                 target = ROLE_SCRIPTS.get(target, '')
+            elif not os.path.isabs(target):
+                # --run 给相对路径时按**代码目录**解析，不看当前工作目录：
+                # 打包后 tools/ 在 _internal\ 里，而用户是在 exe 那一层开命令行的。
+                # 实测：在 exe 目录里敲 "EarShot.exe --run tools/download_model.py"
+                # 会报「找不到要跑的脚本」—— 同一句话必须在 _internal 里敲才对。
+                target = os.path.join(CODE, target)
             return target, argv[:i] + argv[i + 2:]
     return None, None
 

@@ -46,3 +46,22 @@ def test_all_required_files_have_a_threshold():
     """FILES 里每个文件都得有阈值，不能靠 .get(f, 1) 兜底成"存在即合格"。"""
     for f in dm.FILES:
         assert f in dm.MIN_BYTES, f
+
+# ── 下到哪：数据根，不是代码目录（0.9.22）──────────────────────────────
+# 打包成 exe 后两者不是一回事：__file__ 在 _internal\（onedir 的 _MEIPASS，代码目录），
+# 而 server/settings.py 的 _split_roots() 找模型看的是**数据**目录（exe 那一层）。
+# 照 __file__ 推的话，230MB 会下进 _internal\models\ —— 一个后端永远不看的地方，
+# 用户下完仍然被告知「模型目录不存在」。启动器用 TP_DATA_ROOT 把数据根传下来。
+def test_data_root_prefers_the_launcher_value(monkeypatch, tmp_path):
+    monkeypatch.setenv('TP_DATA_ROOT', str(tmp_path))
+    assert dm._data_root() == str(tmp_path)
+
+
+def test_data_root_falls_back_to_repo_root_in_source_mode(monkeypatch):
+    monkeypatch.delenv('TP_DATA_ROOT', raising=False)
+    assert dm._data_root() == ROOT
+
+
+def test_dest_lives_under_the_chosen_root():
+    assert dm.DEST == os.path.join(dm.ROOT, 'models', 'SenseVoiceSmall-onnx')
+    assert dm.ROOT == dm._data_root()
