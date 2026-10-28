@@ -13,6 +13,13 @@
   "llm_model": "deepseek-flash",
   "_comment_llm_model": "快答线模型名。默认 deepseek-flash（非思考模型，实测首字 281~831ms）。不要换成思考模型（如 deepseek-v4-pro，实测首字约 6690ms，面试场景等不起）。",
 
+  "relay_enabled": true,
+  "relay_base_url": "http://127.0.0.1:3000/v1",
+  "relay_api_key_ref": "TP_RELAY_API_KEY",
+  "relay_model_fast": "earshot-fast",
+  "relay_model_smart": "earshot-smart",
+  "relay_tier": "fast",
+
   "corpus_globs": ["knowledge/**/*.md", "knowledge/**/*.txt"],
   "_comment_corpus_globs": "知识库语料 glob：检索只在你自己的材料里找，答案的事实来源全在这里。默认收 knowledge/ 下的 .md 与 .txt（含所有子目录）。可以指向别处，例如 [\"D:/面试材料/**/*.md\"]；也可以加 patterns 收 .html。语料 0 块时后端会打印提示。",
 

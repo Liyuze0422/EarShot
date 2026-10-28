@@ -80,6 +80,12 @@ _DEFAULTS = {
     'api_key_file': os.path.join(REPO_ROOT, 'config', 'api_key.txt'),
     'base_url': 'https://api.deepseek.com',
     'llm_model': 'deepseek-flash',
+    'relay_enabled': True,
+    'relay_base_url': 'http://127.0.0.1:3000/v1',
+    'relay_api_key_ref': 'TP_RELAY_API_KEY',
+    'relay_model_fast': 'earshot-fast',
+    'relay_model_smart': 'earshot-smart',
+    'relay_tier': 'fast',
     'corpus_globs': [os.path.join(REPO_ROOT, 'knowledge', '**', '*.md'),
                      os.path.join(REPO_ROOT, 'knowledge', '**', '*.txt')],
     # 资料包（空 = 老行为）。见文件头「corpus_profile」。
@@ -116,6 +122,12 @@ _ENV_KEYS = {
     'api_key_file': 'TP_KEY_FILE',
     'base_url': 'TP_BASE_URL',
     'llm_model': 'TP_LLM_MODEL',
+    'relay_enabled': 'TP_RELAY_ENABLED',
+    'relay_base_url': 'TP_RELAY_BASE_URL',
+    'relay_api_key_ref': 'TP_RELAY_API_KEY_REF',
+    'relay_model_fast': 'TP_RELAY_MODEL_FAST',
+    'relay_model_smart': 'TP_RELAY_MODEL_SMART',
+    'relay_tier': 'TP_RELAY_TIER',
     'corpus_globs': 'TP_CORPUS_GLOBS',
     'corpus_profile': 'TP_CORPUS_PROFILE',
     'ports': 'TP_PORTS',
@@ -169,11 +181,39 @@ def _globs(v, fallback):
     return [p for p in out if p] or list(fallback)
 
 
+_ENV_SEEN = None
+
+
+def _env_snapshot():
+    """`_ENV_KEYS` 里所有环境变量当前值的快照 —— 用来发现"环境变量被改了"。"""
+    return tuple((os.environ.get(e) or '').strip() for e in _ENV_KEYS.values())
+
+
 def load(reload=False):
-    """读出生效的配置（dict）。结果缓存，改了就 reload=True。"""
-    global _CACHE
-    if _CACHE is not None and not reload:
+    """读出生效的配置（dict）。结果缓存，改了就 reload=True。
+
+    ⚠ **缓存会把"之后才设置的环境变量"吃掉 —— 0.9.23 修。**
+
+    原实现是 `if _CACHE is not None and not reload: return _CACHE`，
+    于是环境变量只在**第一次 load() 之前**设置才有效。这直接违背了本文件
+    顶部声明的优先级「环境变量 > config/settings.json > 默认值」。
+
+    本机踩到的实例：`tests/test_knowledge_search.py` 在模块顶层设
+    `TP_CORPUS_GLOBS=examples/knowledge/*.md`，但 pytest **收集阶段**先导入了
+    别的测试模块、那里已经触发过 load()，缓存里存的是 config/settings.json
+    的值。结果那个环境变量完全没生效，测试扫的还是本机私人资料包，
+    报出「检索命中的内容与问题无关」——**单跑那个文件是绿的**。
+
+    修法：把 `_ENV_KEYS` 里那些环境变量做一次快照，`load()` 每轮比对，
+    变了就自动重读。代价是每次多 11 次 `os.environ.get`（纳秒级），
+    换来的是"环境变量优先级最高"这句话真的成立，而不是要求每个调用方
+    都记得在改完环境后补一句 `load(reload=True)` —— 那种要求一定会有人忘。
+    """
+    global _CACHE, _ENV_SEEN
+    snap = _env_snapshot()
+    if _CACHE is not None and not reload and snap == _ENV_SEEN:
         return _CACHE
+    _ENV_SEEN = snap
 
     cfg = dict(_DEFAULTS)
     cfg['corpus_globs'] = list(_DEFAULTS['corpus_globs'])
@@ -208,6 +248,19 @@ def load(reload=False):
     cfg['ports'] = _as_ports(cfg.get('ports'), _DEFAULTS['ports'])
     cfg['base_url'] = str(cfg.get('base_url') or '').strip().rstrip('/') or _DEFAULTS['base_url']
     cfg['llm_model'] = str(cfg.get('llm_model') or '').strip() or _DEFAULTS['llm_model']
+    cfg['relay_base_url'] = str(cfg.get('relay_base_url') or '').strip().rstrip('/') or _DEFAULTS['relay_base_url']
+    cfg['relay_api_key_ref'] = str(cfg.get('relay_api_key_ref') or '').strip() or _DEFAULTS['relay_api_key_ref']
+    cfg['relay_model_fast'] = str(cfg.get('relay_model_fast') or '').strip() or _DEFAULTS['relay_model_fast']
+    cfg['relay_model_smart'] = str(cfg.get('relay_model_smart') or '').strip() or _DEFAULTS['relay_model_smart']
+    raw_enabled = cfg.get('relay_enabled', _DEFAULTS['relay_enabled'])
+    cfg['relay_enabled'] = str(raw_enabled).strip().lower() not in ('0', 'false', 'no', 'off')
+    if raw and 'relay_enabled' not in raw and not os.environ.get('TP_RELAY_ENABLED'):
+        cfg['relay_enabled'] = False
+    cfg['relay_tier'] = 'smart' if cfg.get('relay_tier') == 'smart' else 'fast'
+    # Existing TP_BASE_URL users explicitly selected direct mode. Remove that
+    # legacy variable before selecting a relay in the settings window.
+    if (os.environ.get('TP_BASE_URL') or '').strip():
+        cfg['relay_enabled'] = False
 
     _CACHE = cfg
     return cfg
@@ -216,6 +269,65 @@ def load(reload=False):
 def get(key, default=None):
     """取一个配置项；没这个键就返回 default。"""
     return load().get(key, default)
+
+
+def _relay_secret_path():
+    import hashlib
+    ref = get('relay_api_key_ref', 'TP_RELAY_API_KEY')
+    name = hashlib.sha256(ref.encode('utf-8')).hexdigest() + '.bin'
+    return os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')),
+                        'EarShot', 'credentials', name)
+
+
+def _dpapi(data, decrypt=False):
+    import ctypes
+    from ctypes import wintypes
+
+    class Blob(ctypes.Structure):
+        _fields_ = [('size', wintypes.DWORD), ('data', ctypes.POINTER(ctypes.c_byte))]
+
+    if sys.platform != 'win32':
+        raise OSError('Relay credential storage requires Windows DPAPI')
+    buffer = ctypes.create_string_buffer(data)
+    source = Blob(len(data), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_byte)))
+    result = Blob()
+    if decrypt:
+        ok = ctypes.windll.crypt32.CryptUnprotectData(
+            ctypes.byref(source), None, None, None, None, 1, ctypes.byref(result))
+    else:
+        ok = ctypes.windll.crypt32.CryptProtectData(
+            ctypes.byref(source), 'EarShot relay', None, None, None, 1,
+            ctypes.byref(result))
+    if not ok:
+        raise ctypes.WinError()
+    try:
+        return ctypes.string_at(result.data, result.size)
+    finally:
+        ctypes.windll.kernel32.LocalFree(result.data)
+
+
+def relay_key():
+    value = (os.environ.get(get('relay_api_key_ref')) or '').strip()
+    if value:
+        return value
+    path = _relay_secret_path()
+    if not os.path.exists(path):
+        return ''
+    with open(path, 'rb') as f:
+        return _dpapi(f.read(), decrypt=True).decode('utf-8')
+
+
+def save_relay_key(value):
+    path = _relay_secret_path()
+    if not value:
+        if os.path.exists(path):
+            os.remove(path)
+        return
+    encrypted = _dpapi(value.strip().encode('utf-8'))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path + '.tmp', 'wb') as f:
+        f.write(encrypted)
+    os.replace(path + '.tmp', path)
 
 
 def model_dir():
@@ -234,7 +346,23 @@ def corpus_globs():
 
 
 def corpus_profile():
-    """当前资料包名；空字符串 = 未启用（扫整个 knowledge/）。"""
+    """当前资料包名；空字符串 = 未启用（扫整个 knowledge/）。
+
+    ⚠ **`TP_CORPUS_GLOBS` 一旦显式设置，资料包就让位**（0.9.23 修）。
+
+    为什么：这两个是同一件事的两种说法 —— "扫这些文件"和"只扫这个包"。
+    原来的写法是只要 `corpus_profile` 非空就走分包逻辑、**完全忽略** `corpus_globs`，
+    于是 `TP_CORPUS_GLOBS=... python -m pytest tests/test_knowledge_search.py`
+    里那个环境变量**一点作用都没有**：测试想指向 `examples/knowledge/`，
+    实际扫的还是配置里那个私人资料包 —— 本机实测就是这条把测试跑红的。
+
+    按本项目写在 settings.json 顶部、也是所有人默认预期的优先级
+    「环境变量 > config/settings.json > 默认值」，同属一个语义的环境变量
+    没理由被配置文件里的另一个键压住。而且从意图上看：临时在命令行导出
+    `TP_CORPUS_GLOBS` 的人，要的就是"就扫这些文件"，不是"顺便还套个包"。
+    """
+    if (os.environ.get('TP_CORPUS_GLOBS') or '').strip():
+        return ''
     return str(load().get('corpus_profile') or '').strip()
 
 

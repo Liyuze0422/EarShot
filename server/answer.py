@@ -10,6 +10,7 @@ import os
 import sys
 import time
 import re
+import threading
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import settings
 from knowledge import build, detect_topic, tok
@@ -19,19 +20,41 @@ from router import classify, LABEL
 # 密钥：环境变量 TP_API_KEY 优先，其次 KEY_FILE 指向的文件（默认 <仓库根>/config/api_key.txt）。
 # 路径与 base_url / model 都来自 server/settings.py（环境变量 > config/settings.json > 默认值）。
 KEY_FILE = settings.api_key_path()
-BASE_URL = settings.get('base_url')
+RELAY_ENABLED = bool(settings.get('relay_enabled', False))
+DIRECT_BASE_URL = 'https://api.deepseek.com' if RELAY_ENABLED else settings.get('base_url')
+RELAY_BASE_URL = settings.get('relay_base_url')
+BASE_URL = RELAY_BASE_URL if RELAY_ENABLED else DIRECT_BASE_URL
+
+# ── 按授权档位分流端点（商业化接线）──────────────────────────────────────
+#
+# 设计原则：**未激活时行为与接线前完全一致。**
+#   `license.effective_base_url(x)` 在未激活、或档位没有端点覆盖时，原样返回 `x`。
+#   所以对一个自用/未激活的安装来说，这一行是空操作 —— 这是必须的：
+#   授权服务出任何问题都不该让用户答不了题。
+#
+# 整段包在 try 里同理：读授权文件失败、字段缺失、任何异常，都退回原来的 base_url。
+# 授权是**降级功能**，不是关键路径。
+try:
+    try:
+        from server import license as _license      # 作为包导入时
+    except ImportError:
+        import license as _license                  # server/ 在 sys.path 上时
+    BASE_URL = _license.effective_base_url(BASE_URL)
+except Exception:
+    pass
 # 默认模型 deepseek-flash。官方支持的模型名只有 deepseek-flash 和 deepseek-v4-pro（API 报错信息里明确列出）。
 # deepseek-v4-flash 是能用的别名，但交替顺序 A/B（n=15）实测 deepseek-flash 更快：
 #   首字中位 546ms vs 694ms（tools/compare_model_id.py）。
 # 全项目统一走 flash，不用 pro（思考模型，首字 6690ms，面试场景用不上）。
 # 换模型：改 config/settings.json 的 llm_model，或设环境变量 TP_LLM_MODEL。
-MODEL = settings.get('llm_model')
+DIRECT_MODEL = 'deepseek-chat' if RELAY_ENABLED else settings.get('llm_model')
+MODEL = settings.get('relay_model_' + settings.get('relay_tier', 'fast')) if RELAY_ENABLED else DIRECT_MODEL
 EXTRA_BODY = {'thinking': {'type': 'disabled'}}
 # 超时：SDK 默认 read timeout 是 600 秒、默认重试 2 次 —— 面试时网络一抖，
 # 屏幕上就永远停在半句话，不报错也不兜底。8 秒够用（正常首字 0.3~1.5s），重试 1 次，
 # 再失败就走题库兜底。
 ANSWER_TIMEOUT = float(os.environ.get('TP_TIMEOUT', '8'))
-ANSWER_RETRIES = int(os.environ.get('TP_RETRIES', '1'))
+ANSWER_RETRIES = int(os.environ.get('TP_RETRIES', '3'))
 # 首字看门狗：超过这个秒数还没吐第一个字，后端发一条 slow 事件，UI 提示"这题自己先讲"
 # 实测：题面组装（检索 + 题库 + 名词判定）+ 网络往返，正常也要 1.5~2.5 秒才出第一个字。
 # 阈值定 3 秒会在好网络下误报，定 5 秒才既能兜住真卡住、又不吓人。
@@ -78,6 +101,16 @@ COMMON = """你是我的线上面试实时提词器。面试官刚问了一个�
    都在描述面试官的意图,照念很尴尬。
 2. 事实和数字只能来自 <材料> 或 <上文>(上文里已经确认过的数字可以直接用)。
    这两处都没有的数字一个字都不许编;没有就写"无"。
+   ⚠️ **"要具体"不等于"可以编"。** 实测最常犯的错:为了让答案显得具体,
+   凭空补一个 <材料> 里没有的细节。**以下这几类一律禁止编造**:
+   - 我犯过的错、出过的事故、被批评过的事(例:"因为没有经验出过错""被领导说过")
+   - 我上过的课、读过的书、考过的证(材料里没写就是没有)
+     ⚠️ 实测栽得最狠的一处:<材料> 里出现目标公司的业务名词(比如"财务共享"),
+     模型顺手就写成"**我学过财务共享这些课**"。**公司业务方向不等于我的课程或项目**,
+     一个字都不许认领。同理,"行业里常见做法"不许写成"我做过"。
+   - 我没提到过的同事、领导、客户(例:个人项目里凭空出现"跟同事讨论")
+   - 任何没写明的数字(百分比、时长、金额、人数)
+   缺细节时,**宁可少写一句,也不许补一个假的**。答案是短的也比假的好。
    设计题/假设题没有材料可依时,可以讲思路框架,但绝不能编造对方的业务数据或我自己的经历。
    ⚠️ **<公司背景> 是我今天要面试的目标公司,不是我工作过的地方** —— 绝不能说
    "我在<公司名>做过/负责过/待过…",也不能把他们的业务、产品、客户说成我参与过的项目。
@@ -86,7 +119,24 @@ COMMON = """你是我的线上面试实时提词器。面试官刚问了一个�
    材料里没写就说"这块我回头确认",绝不许拿 <公司背景> 里那家公司的业务方向当成我的客户。
    (最容易犯的错:把目标公司做的业务说成"我交付过的客户是干这个的"。)
 3. 口语化,像人在讲自己的判断。不要 markdown 标题、不要分点符号、不要堆技术名词。
-4. 直接说"我",不要"该候选人"。"""
+   ⚠️ **口吻要像说话,不能像写作文。这是最容易翻车的一条,实测模型默认会写成书面体。**
+   - 句子短。**一句话只说一个意思**,长句拆成两三个短句。
+   - 用口语连接词:就、其实、然后、后来、反正、我觉着、我当时想的是、说白了。
+     但别每句都用,一段里两三次就够。
+   - **这些书面词一个都不许出现**:综上、因此、从而、鉴于、基于此、故、其、
+     核心矛盾、赋能、闭环、抓手、维度、颗粒度、从…的角度、首先其次最后、
+     综上所述、一方面另一方面、不仅…而且…、换言之、值得注意的是。
+   - **不许排比,不许三段式对仗**(例:"既…又…还…")。人说话不会这么齐。
+   - 不许用"我认为最重要的是""我觉得关键在于""核心在于"这类套路开场。
+   - 一句判断后面**必须跟一个具体的东西撑着**——具体到动作、具体到时间、
+     具体到"哪一张哪一项"。光有判断没有细节,听着就是空话。
+   - 正反例(照正面的写):
+     反面(AI 腔):"我认为实施顾问的核心在于把业务需求转化为系统能力,
+                  因此需要同时具备业务理解和逻辑拆解能力。"
+     正面(人话):"我理解这活儿就是把客户说的那些糊话,翻成开发能照着做的规则。
+                  我以前核对发票干的就是这个事儿,"
+4. 直接说"我",不要"该候选人"。
+5. 用和面试官提问**相同的语言**回答:问题用英文问,答案就用英文;用中文问就用中文。"""
 
 # ── 分类型策略 ────────────────────────────────────────────────────────
 S_EXPERIENCE = COMMON + """
@@ -95,7 +145,7 @@ S_EXPERIENCE = COMMON + """
 【思路】一句结论性的话,能直接念给面试官听,40 字以内。不要描述他为什么这么问。
 【展开】3 到 4 句。**第一句先说事实**:我当时在哪个项目、具体做了什么、结果是什么
 (材料里有数字就带上);第二句再讲为什么这么做(权衡过什么、排除了什么);
-最后一句补一句做法上的细节(具体到动作,比如"我加了什么、改了什么")。150 字以内。
+最后一句补一句做法上的细节(具体到动作,比如"我加了什么、改了什么")。200 字以内。
 【数字】材料里可引用的具体数字,逗号分隔;没有就只写:无"""
 
 S_DESIGN = COMMON + """
@@ -106,21 +156,21 @@ S_DESIGN = COMMON + """
 严格按下面三段输出,不要任何额外文字:
 【思路】一句结论:这类问题的核心矛盾在哪,或者我会先定死哪个前提。40 字以内,能直接念。
 【拆解】3 到 4 句。讲我按什么维度拆、每步怎么取舍、为什么这么取舍。
-         如果 <公司背景> 里有对方业务信息,必须结合他们的实际情况说,不要讲通用套话。150 字以内。
+         如果 <公司背景> 里有对方业务信息,必须结合他们的实际情况说,不要讲通用套话。200 字以内。
 【落点】一两句:如果真做,我第一步先动什么、先验证什么。"""
 
 S_BEHAVIOR = COMMON + """
 
 这是一道【行为面试题】。严格按下面三段输出,不要任何额外文字:
 【思路】一句结论:这件事的定性 + 我的处理原则。40 字以内,能直接念。
-【展开】压缩版 STAR:情境一句、我的判断一句、动作一句、结果一句(有数字就带上)。150 字以内。
+【展开】压缩版 STAR:情境一句、我的判断一句、动作一句、结果一句(有数字就带上)。200 字以内。
 【数字】材料里可引用的具体数字,没有就只写:无"""
 
 S_MOTIVATION = COMMON + """
 
 这是一道【动机/意向题】。严格按下面三段输出,不要任何额外文字:
 【思路】一句结论:我和对方最核心的匹配点。40 字以内,能直接念。
-【展开】3 到 4 句。结合 <公司背景> 说为什么匹配,用我材料里的具体经历做证据,不喊口号。150 字以内。
+【展开】3 到 4 句。结合 <公司背景> 说为什么匹配,用我材料里的具体经历做证据,不喊口号。200 字以内。
 【数字】材料里可引用的具体数字,没有就只写:无"""
 
 S_REVERSE = """你是我的线上面试提词器。面试官把提问权交给我了,这是加分机会。
@@ -136,7 +186,7 @@ S_GENERAL = COMMON + """
 
 严格按下面三段输出,不要任何额外文字:
 【思路】一句结论,能直接念,40 字以内。
-【展开】3 到 4 句,150 字以内。**先给我做过的事实(项目/动作/数字),再给我的判断和方法。**
+【展开】3 到 4 句,200 字以内。**先给我做过的事实(项目/动作/数字),再给我的判断和方法。**
 材料里没有对应经历时,第一句要明说"这块我没有实战经历"。
 【数字】材料里可引用的具体数字,没有就只写:无"""
 
@@ -874,6 +924,45 @@ def retrieve(question, topk=DEFAULT_TOPK, history=None):
     return '\n\n---\n\n'.join(mats), hits
 
 
+def _is_english(q):
+    """问句是不是英文（ASCII 字母够多、且明显多于汉字）。"""
+    letters = sum(1 for c in (q or '') if c.isascii() and c.isalpha())
+    cjk = sum(1 for c in (q or '') if '\u4e00' <= c <= '\u9fff')
+    return letters >= 8 and letters > cjk * 2
+
+
+# ── 中文说的"请用英文回答" ──────────────────────────────────────────
+# 除了"整句是英文"，还有一种更常见的：**用中文提问、但点名要英文答案**。
+# 典型就是"请用英文做一个自我介绍"。以前只判断 _is_english，这种句子被当成
+# 普通自我介绍 —— 预生成直接吐一份**中文**稿，用户听到的就是"他听不懂人话"。
+# 命中后必须做两件事：(a) 跳过中文预生成缓存，(b) 强制整段英文作答。
+_EN_ASK = re.compile(
+    r'(用|以|说|讲|答|回|改|换|翻译成)(成|作|做|为)?\s*(英文|英语)|'
+    r'(英文|英语)\s*(回答|作答|来|说|讲|介绍|版|复述)|'
+    r'\bin\s+english\b|\benglish\s*(please|answer|version)\b',
+    re.I)
+
+
+def _asks_english(q):
+    """中文提问、但明确要求用英文回答。"""
+    return bool(_EN_ASK.search(q or ''))
+
+
+def _need_english(q):
+    """这一题要不要用英文作答：整句是英文，或者中文点名要英文。"""
+    return _is_english(q) or _asks_english(q)
+
+
+# 英文题专用强指令：满屏中文材料会把模型顺手拽回中文（实测英文题答成过中文）。
+# 这条放在**整个 user 消息的最后**（离生成最近），并且点明"材料是中文的，要翻译"——
+# 只在 system 的通用规则里写一句"用相同语言回答"，实测压不住。
+_EN_FORCE_HINT = (
+    '⚠️ 最重要：这一题**必须用英文作答**。你这一整段答案必须**从头到尾全部用英文**写，'
+    '连【思路】【展开】【数字】这几个标签后面的正文也要用英文，不许出现整句中文。'
+    '我的材料是中文写的，你要先把内容**翻译成英文**再写出来，禁止直接照抄中文原句。'
+    '（即使提问用的是中文，只要要求了英文，答案就必须是英文。）')
+
+
 def build_messages(question, qtype=None, company=None, topk=DEFAULT_TOPK, history=None):
     qtype = decide_qtype(question, qtype)   # 材料外名词会被翻成 gap，标签和策略同一个口径
     gap = is_unknown_gap(question) if qtype == 'gap' else []
@@ -913,6 +1002,8 @@ def build_messages(question, qtype=None, company=None, topk=DEFAULT_TOPK, histor
             parts.append('⚠️ 注意：%s 这些词我材料里没有细节，但这块我是会的。'
                          '可以讲我的真实理解，但不许编造参数、指标、工具名和踩过的坑。' % '、'.join(back))
     parts.append('面试官提问:%s' % question)
+    if _need_english(question):
+        parts.append(_EN_FORCE_HINT)
     if is_brief(question):
         parts.append(BRIEF_HINT)
     elif _ENUM.search(question):
@@ -931,7 +1022,10 @@ def _client(timeout):
     global _CLIENT
     if _CLIENT is None or getattr(_CLIENT, '_tp_timeout', None) != timeout:
         from openai import OpenAI
-        _CLIENT = OpenAI(api_key=load_key(), base_url=BASE_URL,
+        api_key = settings.relay_key() if RELAY_ENABLED else load_key()
+        if not api_key:
+            raise RuntimeError('Relay token is not configured')
+        _CLIENT = OpenAI(api_key=api_key, base_url=BASE_URL,
                          timeout=timeout, max_retries=ANSWER_RETRIES)
         _CLIENT._tp_timeout = timeout
     return _CLIENT
@@ -944,10 +1038,18 @@ def warmup():
     差的这 2~3 秒全在"第一次连 api.deepseek.com"上。第一题往往是自我介绍，最不该慢。
     只发 1 个 token，成本可忽略；顺带确认 key 是好的。
     """
-    c = _client(ANSWER_TIMEOUT)
-    c.chat.completions.create(model=MODEL, messages=[{'role': 'user', 'content': 'ok'}],
-                              max_tokens=1, extra_body=EXTRA_BODY)
-    return True
+    try:
+        c = _client(ANSWER_TIMEOUT)
+        c.chat.completions.create(model=MODEL, messages=[{'role': 'user', 'content': 'ok'}],
+                                  max_tokens=1, extra_body=EXTRA_BODY)
+        return True
+    except Exception:
+        if not RELAY_ENABLED:
+            raise
+        from providers import direct_fallback
+        direct_fallback.warmup(settings, DIRECT_BASE_URL, DIRECT_MODEL,
+                               ANSWER_TIMEOUT, ANSWER_RETRIES)
+        return True
 
 
 def answer_stream(question, on_delta=None, qtype=None, company=None, topk=DEFAULT_TOPK, history=None,
@@ -958,24 +1060,227 @@ def answer_stream(question, on_delta=None, qtype=None, company=None, topk=DEFAUL
     也不会把上一题的答案混进下一题（那是"照念错内容"级别的错）。
     """
     msgs, qtype, hits = build_messages(question, qtype, company, topk, history)
-    client = _client(timeout)
     t0 = time.time(); first = None; buf = []
-    stream = client.chat.completions.create(
-        model=MODEL, messages=msgs, stream=True,
-        temperature=0.2, max_tokens=400, extra_body=EXTRA_BODY)
-    for ch in stream:
-        if should_stop and should_stop():
-            break
-        if not ch.choices:
-            continue
-        piece = getattr(ch.choices[0].delta, 'content', None)
-        if piece:
-            if first is None:
-                first = time.time() - t0
-            buf.append(piece)
-            if on_delta:
-                on_delta(piece)
+    try:
+        client = _client(timeout)
+        stream = client.chat.completions.create(
+            model=MODEL, messages=msgs, stream=True,
+            temperature=0.2, max_tokens=400, extra_body=EXTRA_BODY)
+        for ch in stream:
+            if should_stop and should_stop():
+                break
+            if not ch.choices:
+                continue
+            piece = getattr(ch.choices[0].delta, 'content', None)
+            if piece:
+                if first is None:
+                    first = time.time() - t0
+                buf.append(piece)
+                if on_delta:
+                    on_delta(piece)
+        if not buf and not (should_stop and should_stop()):
+            raise RuntimeError('Relay returned no answer text')
+    except Exception:
+        if not RELAY_ENABLED or buf:
+            raise
+        from providers import direct_fallback
+        stream = direct_fallback.stream(settings, DIRECT_BASE_URL, DIRECT_MODEL,
+                                        msgs, timeout, ANSWER_RETRIES)
+        for ch in stream:
+            if should_stop and should_stop():
+                break
+            if not ch.choices:
+                continue
+            piece = getattr(ch.choices[0].delta, 'content', None)
+            if piece:
+                if first is None:
+                    first = time.time() - t0
+                buf.append(piece)
+                if on_delta:
+                    on_delta(piece)
     return ''.join(buf), first, time.time() - t0, qtype, hits
+
+
+# ── 常见题预生成 ────────────────────────────────────────────────────────
+# 实测（tools/bench_latency.py / bench_models.py）：整条链路的瓶颈**全在中转站首字**，
+# 约 1.6~2.2 秒，且和提示词长短无关（只发「你好」两个字也要 2 秒）——本地检索
+# 缓存之后只要 3~7ms。也就是说靠优化提示词和检索再也压不下来。
+# 但面试开场那几题几乎必然被问到，而启动本来就要等 20 秒：用这段时间提前生成好，
+# 真被问到时直接铺缓存，0 毫秒上屏（省掉的正是那 2 秒）。
+PREGEN_QS = [
+    # 按"被问到的概率"排序：越靠前越先预生成。开场那几题几乎必然出现，
+    # 所以即使面试提前开始，前几题也一定已经躺在缓存里了。
+    '请做一个自我介绍',
+    '你为什么选择我们公司',
+    '你的优势是什么',
+    '你的缺点是什么',
+    '你的职业规划是什么',
+    '说说你最有成就感的一件事',
+    '介绍一下你的实习经历',
+    '你为什么选择这个岗位',
+    '你认为你适合这个岗位吗',
+    '你有什么想问我的',
+    '说一次你失败的经历',
+    '你遇到过最大的困难是什么',
+    '你对我们公司了解多少',
+    '你如何应对压力',
+    '你在大学里最难忘的经历是什么',
+    '你还有什么要补充的吗',
+    # ── 方向专属题：跟着资料包（corpus_profile）走 ──────────────────────
+    # 面试哪家就预生成哪家最可能被问的题。写死成一份会让「换公司」时
+    # 预生成出一份答偏的稿子（实测：汉得面试场上被问"你为什么选我们"，
+    # 缓存里躺着的是"你为什么想做供应链方向"）。
+    # 通用题在上面，这里只放各方向的专属追问。
+]
+
+# 各方向的专属高频追问。键 = config/settings.json 里的 corpus_profile。
+# 换了资料包，预生成的内容跟着换 —— 不用改代码，只改配置。
+PREGEN_BY_PROFILE = {
+    '汉得': [
+        '你为什么选择汉得',
+        '你怎么理解实施顾问这个岗位',
+        '你为什么想做顾问而不是做财务',
+        '你没有实施经验怎么办',
+        '你能接受出差吗',
+        '你了解汉得吗',
+        '客户说不清需求你怎么办',
+    ],
+    '顾家家居': [
+        '你为什么想做供应链方向',
+        '你怎么理解生产计划这个岗位',
+        '生产计划和物料计划有什么区别',
+        '你为什么从会计转到供应链',
+        '你了解MRP吗',
+    ],
+}
+
+
+def _profile_qs():
+    """按当前资料包取方向专属题。取不到就只跑通用题，不影响主链路。"""
+    try:
+        p = str(settings.get('corpus_profile') or '').strip()
+    except Exception:
+        return []
+    return list(PREGEN_BY_PROFILE.get(p, []))
+
+
+_PREGEN = {}
+_PREGEN_LOCK = threading.Lock()
+
+
+def _norm_q(q):
+    """归一化：去掉标点/空白，只留实义字，便于严格比对。"""
+    return re.sub(r'[\s，。、？！,.?!~～"\'“”‘’（）()【】\[\]:：;；/\\-]+', '', (q or ''))
+
+
+# 高频题的同义问法：同一类问题的不同说法直接复用同一条缓存，省掉一次生成的 3 秒。
+# 只给**最容易换说法、且换法之间答案完全通用**的三类做（自我介绍/反问/职业规划）。
+# 其余一律走严格匹配 —— 宁可慢 2 秒，也不能把"介绍一个项目"错铺成自我介绍。
+# 模式都锚定在句尾，并要求整句够短；"介绍"后面必须直接跟"自己"才算自我介绍。
+PREGEN_ALIAS = [
+    (re.compile(r'自我介绍|介绍(一下|下)?(你自?己|自己)|说一下你的情况'), '请做一个自我介绍'),
+    (re.compile(r'(为什么|为啥|为何|怎么).{0,8}(我们|贵公司|贵司|公司|顾家|汉得|汉德|明源)'), '你为什么选择我们公司'),
+    (re.compile(r'(你|您).{0,2}(的)?(优势|优点|长处)|(优势|优点|长处).{0,3}(是什么|有哪些|在哪)'), '你的优势是什么'),
+    (re.compile(r'(你|您).{0,6}(缺点|不足|短板|劣势)|(缺点|不足|短板).{0,3}(是什么|有哪些)'), '你的缺点是什么'),
+    (re.compile(r'(职业|未来|长期).{0,4}(规划|计划)|三到五年|3\s*[-到~]?\s*5\s*年'), '你的职业规划是什么'),
+    (re.compile(r'(还)?有(什么|没有)(想)?问(我|的|题)'), '你有什么想问我的'),
+    (re.compile(r'实习经历|实习.{0,4}(做|干)了?什么?|介绍一下.{0,4}实习'), '介绍一下你的实习经历'),
+    (re.compile(r'(最有成就感|最自豪|最骄傲|最成功)'), '说说你最有成就感的一件事'),
+    (re.compile(r'(对.{0,4}公司|对我们|对顾家|对汉得|对汉德).{0,6}了解|了解.{0,4}(我们|顾家|汉得|汉德)'), '你对我们公司了解多少'),
+    (re.compile(r'(失败|挫折).{0,4}经历'), '说一次你失败的经历'),
+    (re.compile(r'(最大|遇到)了?.{0,4}(困难|挑战)'), '你遇到过最大的困难是什么'),
+    (re.compile(r'(压力|抗压)'), '你如何应对压力'),
+    (re.compile(r'(适合|胜任|匹配).{0,4}(这个|该)?(岗位|职位)'), '你认为你适合这个岗位吗'),
+    (re.compile(r'(为什么|怎么|为何).{0,6}(这个|该)?.{0,2}(岗位|职位|方向)'), '你为什么选择这个岗位'),
+    (re.compile(r'(补?充|最后).{0,6}(想说|要说|说的|补充)'), '你还有什么要补充的吗'),
+]
+
+
+def pregen_ready():
+    with _PREGEN_LOCK:
+        return len(_PREGEN)
+
+
+def pregen(questions=None, progress=None):
+    """后台线程调用：逐条预生成常见题答案。任何一条失败都静默跳过，不影响主链路。
+
+    题目 = 通用题 + 当前资料包的方向专属题（_profile_qs）。
+    """
+    qs = list(questions) if questions else (list(PREGEN_QS) + _profile_qs())
+    for q in qs:
+        try:
+            text, _first, _total, qt, hits = answer_stream(q)
+        except Exception:
+            continue
+        if not text or len(text) < 20:
+            continue
+        with _PREGEN_LOCK:
+            _PREGEN[_norm_q(q)] = {'text': text, 'qtype': qt,
+                                   'srcs': [s for _, s, _ in hits], 'q': q}
+        if progress:
+            try:
+                progress(q, text)
+            except Exception:
+                pass
+
+
+# ── ASR 同音字纠错 ────────────────────────────────────────────────────
+# 语音识别对专有名词极弱，实测把「汉得」听成「汉德」。不纠的后果不是错答案，
+# 而是**白白错过 0 秒预生成、改走大模型多花 2 秒** —— 面试里每一秒都贵，
+# 而且慢出来的那 2 秒正好落在你抬头看屏幕、面试官等你开口的空档上。
+# 只改这些确定性的同音错字，不做模糊替换（模糊替换会把正常句子改坏）。
+_HOMOPHONE = [
+    ('汉德', '汉得'), ('汗得', '汉得'), ('韩得', '汉得'),
+    ('汉的', '汉得'), ('翰得', '汉得'), ('喊得', '汉得'),
+    ('汉得信息', '汉得信息'), ('汉德信息', '汉得信息'),
+    ('实施顾问', '实施顾问'), ('数智化', '数智化'),
+    ('集中交付', '集中交付'), ('集中化交付', '集中交付'),
+    ('财务共享', '财务共享'), ('业财一体', '业财一体'),
+    ('费用控制', '费用控制'), ('资金管理', '资金管理'), ('结算管理', '结算管理'),
+]
+
+
+def _fix_homophone(t):
+    """把 ASR 常听错的专有名词换成正确的写法。只做整词替换。"""
+    if not t:
+        return t
+    for wrong, right in _HOMOPHONE:
+        if wrong != right and wrong in t:
+            t = t.replace(wrong, right)
+    return t
+
+
+def pregen_hit(question):
+    """命中返回缓存，否则 None。
+
+    三层匹配，从严到宽：
+      1. 同义问法（仅限上面那三类，且整句够短）
+      2. 归一化后完全相等
+      3. 一条完整包含另一条且长度只差 ≤4 字
+    宁可漏（不命中就走正常链路，只是慢 2 秒），也不能错 —— 铺一条不对应的答案
+    上屏比慢 2 秒严重得多。
+    """
+    n = _fix_homophone(_norm_q(question))
+    if len(n) < 4:
+        return None
+    # 要求用英文回答的，一律不走预生成 —— 缓存里全是中文稿，
+    # 命中就等于"你要英文、我偏给中文"。交给后面强制英文的正常链路。
+    if _asks_english(question):
+        return None
+    with _PREGEN_LOCK:
+        items = dict(_PREGEN)
+    if len(n) <= 30:
+        for pat, src in PREGEN_ALIAS:
+            v = items.get(_norm_q(src))
+            if v and pat.search(n):
+                return v
+    for k, v in items.items():
+        if n == k:
+            return v
+    for k, v in items.items():
+        if abs(len(n) - len(k)) <= 4 and (n in k or k in n):
+            return v
+    return None
 
 
 # ── 答案后校验（线上拦一道，而不是只在离线评测里测）────────────────────
