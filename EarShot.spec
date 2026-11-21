@@ -64,7 +64,11 @@ a = Analysis(
     # pyarrow 是 pandas 的存储后端，matplotlib 不画图 —— 都不需要。
     # transformers / pandas / numba 先留着：不确定 funasr_onnx 是否真用到，宁大勿崩。
     excludes=['tkinter', 'IPython', 'pytest', '_pytest',
-              'torch', 'torchaudio', 'torchvision', 'pyarrow', 'matplotlib'],
+              'torch', 'torchaudio', 'torchvision', 'pyarrow', 'matplotlib',
+              # 2026-11-21：本机系统 Python 装了 duckdb，PyInstaller 会顺着 import 链
+              # 把整个 duckdb 收进包（_duckdb.pyd 40.9MB），而项目从不 import 它。
+              # 不排除的话发布包 +44MB、给老用户的差分包 +40MB —— 纯浪费。
+              'duckdb'],
     noarchive=False,
     optimize=0,
 )
