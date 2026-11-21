@@ -88,6 +88,10 @@ EarShot 不替你回答问题，它做的是**在正确的时刻，把你准备�
 > 没装 git 也没关系：打开 https://github.com/Liyuze0422/EarShot ，点绿色的 **Code → Download ZIP**，
 > 解压到 `C:\dev\EarShot` 效果一样（**路径必须是纯英文**，原因见下面第 0 步）。
 
+> **下载 Release 安装包（exe）的也一样：解压到纯英文路径，例如 `C:\EarShot`。** 放在中文路径下
+> `EarShot.exe` 双击**完全没反应**（不弹窗、`logs\launch.log` 也不写新行）；0.9.23 起解压出来的
+> `启动-EarShot.bat` 会先自检路径并直接给中文提示 —— **双击它启动，别直接双击 exe**。
+
 ```powershell
 git clone https://github.com/Liyuze0422/EarShot.git C:\dev\EarShot
 cd C:\dev\EarShot

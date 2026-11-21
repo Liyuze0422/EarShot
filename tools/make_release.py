@@ -6,6 +6,11 @@ r"""把打包好的目录变成可以发布的资产（清单 / 全量包 / 差�
         --prev build\release\manifest-v0.9.19.json     # 额外生成差分包
     python tools\make_release.py --dir dist\EarShot --version 0.9.20 --out build\release --full
 
+**根级文件**：发布包根目录还必须带 `启动-EarShot.bat`、`check_path.ps1`、`README-安装必读.txt`
+（装在中文路径下 exe 会静默起不来，这几个文件负责在启动前拦住并提示）。它们放在仓库的
+`release_assets\`，打包前会被复制到 `--dir` 根再统一扫描 —— 全量包、差分包、清单三处
+都会带上，不用在各处另写一份名单。用 `--extra-dir` 换目录，传空串关掉。
+
 **为什么要有它**：Release 里放一个 486MB 的 zip，用户每次更新都得重下 486MB —— 而其中
 **会变的只有自己的代码**（dist 里 1581 个文件，自有代码只有 52 个，约 1.3MB）。
 这个脚本算出「哪些文件跟上一版不一样」，只把它们打进差分包，把每次更新的下载量
@@ -34,6 +39,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import sys
 import time
 import zipfile
@@ -72,6 +78,26 @@ def scan(root, skip=()):
             except OSError as e:
                 print('  ! 跳过 %s (%s)' % (r, e))
     return files
+
+
+def copy_extra(extra, root):
+    """把 extra 目录里的全部文件按相对路径复制到 root 根级，覆盖同名文件。返回文件数。
+
+    发布包根级的固定文件（启动引导脚本、安装必读）不该手工往 dist 里拷：那样全量包会
+    带上、差分包却可能漏掉。先铺进 --dir 再统一 scan，三种产物自然一致。
+    """
+    n = 0
+    for dirpath, _dirnames, filenames in os.walk(extra):
+        for name in filenames:
+            src = os.path.join(dirpath, name)
+            r = rel(os.path.relpath(src, extra))
+            dst = os.path.join(root, r.replace('/', os.sep))
+            parent = os.path.dirname(dst)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            shutil.copy2(src, dst)
+            n += 1
+    return n
 
 
 def write_manifest(files, version, out_path):
@@ -115,6 +141,9 @@ def main():
     ap.add_argument('--full', action='store_true', help='同时打全量包（486MB，比较慢）')
     ap.add_argument('--embed', action='store_true',
                     help='把清单写进包目录（%s），让程序知道自己是哪一版' % MANIFEST_NAME)
+    ap.add_argument('--extra-dir', default='release_assets',
+                    help='打包前先把这个目录的内容复制到 --dir 根（默认 release_assets；'
+                         '不存在就跳过，传空串关掉）')
     a = ap.parse_args()
 
     root = os.path.abspath(a.dir)
@@ -123,6 +152,14 @@ def main():
         print('目录不存在：%s' % root)
         return 2
     os.makedirs(out, exist_ok=True)
+
+    # 发布包根级的固定文件（启动-EarShot.bat / check_path.ps1 / 安装必读）先铺进包里，
+    # 再统一扫描：全量包、差分包、清单都会带上，不用在三处各写一遍名单。
+    extra = os.path.abspath(a.extra_dir) if a.extra_dir else ''
+    if extra and os.path.isdir(extra):
+        print('根级文件 %d 个 -> %s（来自 %s）' % (copy_extra(extra, root), root, extra))
+    elif extra:
+        print('! --extra-dir 不存在，跳过：%s' % extra)
 
     # 包里的清单永远排除它自己
     skip = (os.path.join('_internal', MANIFEST_NAME),) if a.embed else ()

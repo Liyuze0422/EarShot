@@ -103,7 +103,8 @@ def assets(ver, prev):
     say('[3/4] 生成清单 + 包')
     os.makedirs(OUT, exist_ok=True)
     run([PY, '-X', 'utf8', os.path.join('tools', 'make_release.py'),
-         '--dir', DIST, '--version', ver, '--out', OUT, '--full', '--embed']
+         '--dir', DIST, '--version', ver, '--out', OUT, '--full', '--embed',
+         '--extra-dir', 'release_assets']
         + (['--prev', prev[1]] if prev else []))
     if not prev:
         say('  ! 没有上一版清单，这次只有全量包 —— 老用户更新会走全量下载')

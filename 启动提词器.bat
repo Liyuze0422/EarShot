@@ -7,6 +7,18 @@ setlocal
 cd /d "%~dp0"
 set DOUBLECLICK=
 echo %cmdcmdline% | find /i "%~nx0" >nul && set DOUBLECLICK=1
+
+rem Fail fast on a non-ASCII repo path: .venv\Scripts\python.exe only says
+rem "No pyvenv.cfg file" there, and the packaged exe cannot even load its own
+rem PKG archive. tools/check_path.ps1 prints the reason in Chinese and exits 9.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\check_path.ps1" "%~dp0"
+if errorlevel 1 (
+  echo.
+  echo Launch aborted: the repo path contains non-ASCII characters.
+  if defined DOUBLECLICK pause
+  exit /b 9
+)
+
 echo Starting interview teleprompter ...
 "%~dp0.venv\Scripts\python.exe" -X utf8 "%~dp0tools\launch.py"
 set RC=%errorlevel%
