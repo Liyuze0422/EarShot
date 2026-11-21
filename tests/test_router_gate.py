@@ -120,3 +120,45 @@ def test_20260920_real_questions_survive():
         '其实我理解这中间还是会有一些你的转变的，第一个就是你为什么当时上了这个学校和这个专业。',
     ]:
         assert router.is_skip(t) is False, t
+
+
+# ── 2026-11-21：ASR 出敬语「您」时，只认「你」的规则会整题漏放 ────────────────
+# 09-15 那场唯一确认漏掉的整题「所以说您在这方面有没有什么就是心得。。」就是被
+# QUESTION_FORM 的"你 + 有没有"判成 skip 的（真实面试里 ASR 会出敬语）。
+# 只放宽"是不是在问我"这类放行规则；SKIP 里的设备确认规则不动 —— 那里放宽
+# 反而会多杀真问题。
+
+def test_polite_you_is_kept_as_question():
+    """「您…有没有/怎么样/为什么/做过」必须放行（以前只在有问号/「吗」时才碰巧放行）。"""
+    for t in [
+        '所以说您在这方面有没有什么就是心得。。',     # 09-15 实际漏掉的那一题
+        '您觉得这个方案怎么样？',
+        '您之前做过类似的项目吗',
+        '您当时为什么选这个技术方向',
+        '您那边有什么想了解的吗',
+    ]:
+        assert router.is_skip(t) is False, t
+    assert router.classify('您觉得这个方案怎么样？') != 'skip'
+
+
+def test_polite_you_design_and_reverse_rules():
+    """DESIGN / REVERSE 里同样只认「你」的规则同步兼容敬语。"""
+    assert router.classify('您会怎么设计这个检索系统？') == 'design'
+    assert router.classify('您打算怎么落地这个方案？') == 'design'
+    assert router.classify('您怎么看这件事') == 'design'
+    assert router.classify('您想了解什么') == 'reverse'
+    assert router.is_skip('您这边有什么想了解的吗') is False
+
+
+def test_polite_you_does_not_let_plain_statements_through():
+    """兼容敬语不等于"见到您就放行"：纯陈述句仍然要判 skip。"""
+    for t in ['您这边的业务我了解一些。', '您之前说的那个方向我记下了。']:
+        assert router.is_skip(t) is True, t
+
+
+def test_polite_you_in_long_inverted_question_tail():
+    """长句末尾倒装的「您…为什么」不能被 LONG_STATEMENT 当成陈述（_TAIL_Q 同步）。"""
+    t = ('我们这边其实也在看类似的方向，团队里讨论过很多次，'
+         '不过我特别想了解您当初为什么会选择这个技术方向')
+    assert len(t) >= router.LONG_STATEMENT
+    assert router.is_skip(t) is False

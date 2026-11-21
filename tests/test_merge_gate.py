@@ -4,6 +4,9 @@
 背景（2026-09-13）：用户反馈"面试官一停顿再说话，显示的答案就变了"。
 根因是 VAD 判停（默认 600ms）后**立刻**发答案，第二段来了又发一次并把上一个顶掉。
 
+2026-11-21 起合并窗口默认值 600 → 350（实际合并阈值 1040ms → ≈790ms）：
+参数本身的行为没变，变的只是默认手感，见文件末尾的默认值断言。
+
 回归门禁喂的是文本不是音频，覆盖不到这条链路，所以这里单独测。
 """
 import os
@@ -99,3 +102,23 @@ def test_reset_drops_pending():
 ])
 def test_is_half_sentence(t, half):
     assert main._is_half_sentence(t) is half
+
+
+# ── 默认值（2026-11-21 修"快语速连问被粘、只答一问"）────────────────────
+def test_default_merge_window_is_350():
+    """默认合并窗口 600 → 350。
+
+    旧的 600 实际合并阈值 = vad_end_ms(600) + merge(600) − start_ms(160) ≈ 1040ms；
+    41 场真实录音（14.4h）里 69.6% 的相邻句界静音 <1040ms 会被粘成一次识别，
+    面试官快语速连问因此被粘成一段、只答一问。350 是折中（阈值 ≈790ms），
+    慢语速/爱停顿的人可以改回 600（config/settings.json 一行，不用改代码）。
+    """
+    import settings
+    assert settings._DEFAULTS['vad_merge_ms'] == 350
+
+
+def test_default_multi_question_split_is_on():
+    """多问拆分默认开；关掉 = 回到"一次识别只答一问"的旧行为。"""
+    import settings
+    assert settings._DEFAULTS['split_multi_q'] is True
+    assert settings._DEFAULTS['split_multi_q_max'] == 3

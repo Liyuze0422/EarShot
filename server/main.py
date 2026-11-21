@@ -166,6 +166,9 @@ EVENTS = queue.Queue()          # 采集线程 -> 事件循环
 STATE = {'paused': False, 'listening': False, 'asr': None, 'ready': False,
          'recent': [], 'qid': 0, 'first_seen': {}, 'lock': threading.Lock(),
          'port': None, 'device': '', 'audio_restarts': 0, 'vad': 0.006,
+         # qid -> threading.Event：这题的答案线程退出时 set()。多问组内"答完一题
+         # 再提交下一题"靠它（见 ask_group）。
+         'ans_done': {},
          'session': time.strftime('%Y%m%d_%H%M%S')}
 
 
@@ -356,6 +359,16 @@ def _history():
 
 
 def run_fast_answer(question, qid):
+    """快答线程入口。外面只多一层 finally：线程无论怎么退出都要叫醒 ask_group。"""
+    try:
+        _run_fast_answer(question, qid)
+    finally:
+        ev = STATE['ans_done'].pop(qid, None)
+        if ev is not None:
+            ev.set()
+
+
+def _run_fast_answer(question, qid):
     import answer as A
     from router import LABEL
     qt = A.decide_qtype(question)
@@ -440,16 +453,56 @@ def ask(question, with_deep=False, force=False):
     if qt == 'skip' and not force:
         emit({'type': 'filtered', 'text': question, 'ts': time.time()})
         log_rec({'event': 'filtered', 'q': question})
-        return
+        return None
     with STATE['lock']:
         STATE['qid'] += 1
         qid = STATE['qid']
         STATE['recent'].append(question)
         del STATE['recent'][:-20]          # 只留最近 20 句，别无限涨
+    # 先挂好"答完了"的事件再起线程：线程可能瞬间跑完，先起线程会漏掉唤醒。
+    STATE['ans_done'][qid] = threading.Event()
     emit({'type': 'question', 'text': question, 'qtype': qt, 'ts': time.time()}, qid)
     threading.Thread(target=run_fast_answer, args=(question, qid), daemon=True).start()
     if with_deep:
         threading.Thread(target=run_deep_answer, args=(question, qid), daemon=True).start()
+    return qid
+
+
+# ── 多问拆分后的组内派发 ───────────────────────────────────────────────
+GROUP_ANSWER_WAIT_S = 30.0   # 组内等上一题答案落屏的上限；超时就发下一题，别整组卡死
+
+
+def ask_group(questions):
+    """同一次识别里拆出的多个问题：按顺序一题一题提交，不并发。
+
+    为什么必须等上一题答完再发下一题：ask() 每题分配新 qid，而快答线线程一启动
+    就先判 stale(qid) —— 连着 ask 会让前一题的答案线程直接判过期退出（实测两连问
+    只出最后一条答案事件），用户那边看还是"只答一问"。这里等 answer_done 再提交
+    下一题，屏幕就会先后显示多条问答；qid/history 语义不变（每题照旧 +1、都进 recent）。
+
+    期间面试官又开口（外部 ask 把 qid 推进）→ 本组剩下的小问作废：新的那句优先，
+    避免旧题把新题顶掉；作废的记一条日志，方便事后量化。
+    """
+    qs = [q for q in (questions or []) if q]
+    if len(qs) <= 1:
+        if qs:
+            ask(qs[0])
+        return
+
+    def _run():
+        for i, q in enumerate(qs):
+            qid = ask(q)
+            if qid is None:
+                continue                      # 被判"非提问"：没起答案线程，直接下一题
+            ev = STATE['ans_done'].get(qid)
+            if ev is not None:
+                ev.wait(GROUP_ANSWER_WAIT_S)
+            if i < len(qs) - 1 and stale(qid):
+                log_rec({'event': 'question_group_dropped',
+                         'questions': qs[i + 1:], 'reason': 'superseded'})
+                return
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 # ── 采集线程（可自愈）─────────────────────────────────────────────────
@@ -466,9 +519,15 @@ def capture_once(vad_thresh):
     # 面试官句内换气、想一下再说下半句，常常超过 vad_end_ms。旧版一判停就发答案，
     # 第二段来了又发一次并把上一个顶掉 —— 用户看到的就是"答案乱变"。
     # 现在：判停后先攒着，merge_s 内只要又出声就取消待发，等它说完拼成一句再送。
-    merge_s = max(0.0, int(settings.get('vad_merge_ms', 600) or 0) / 1000.0)
+    merge_s = max(0.0, int(settings.get('vad_merge_ms', 350) or 0) / 1000.0)
     hold_on = bool(settings.get('hold_incomplete', True))
     max_hold_s = float(settings.get('max_hold_s', 4.0) or 4.0)
+    # 多问拆分（2026-11-21）：快语速连问被合并窗口粘成一段时，文本层拆回逐题。
+    split_on = bool(settings.get('split_multi_q', True))
+    try:
+        split_max = max(1, int(settings.get('split_multi_q_max', 3) or 3))
+    except (TypeError, ValueError):
+        split_max = 3
     if merge_s or hold_on:
         emit({'type': 'status', 'stage': 'merge_window',
               'mergeMs': int(merge_s * 1000), 'holdIncomplete': hold_on})
@@ -538,10 +597,30 @@ def capture_once(vad_thresh):
                   'latencyMs': round((time.time() - t0 + dt) * 1000)})
             continue
         hold['text'], hold['at'] = '', 0.0
+        # 多问拆分：合并窗口把面试官两三个提问粘成一段时，整段只 ask 一次 → 只出
+        # 一条答案、后面的问题被吞（41 场真实录音里 69.6% 的句界静音 < 实际合并阈值）。
+        # 这里把粘住的文本再拆回逐题；拆不出来就原样走，单题行为一个字不变。
+        qs = [txt]
+        if split_on:
+            try:
+                from extract_q import split_questions
+                qs = split_questions(txt, max_n=split_max) or [txt]
+            except Exception as e:
+                crash('split_questions', e)
+                qs = [txt]
+        n_split = len(qs) if len(qs) > 1 else 0
         emit({'type': 'asr', 'text': txt, 'dur': round(dur, 2),
               'asrMs': round(dt * 1000), 'held': False, 'merged': gate.n_merged,
+              'split': n_split,
               'latencyMs': round((time.time() - t0 + dt) * 1000)})
-        ask(txt)
+        # ASR 文本落盘（logs/ 已 gitignore）。之前 session 日志只有 answer/filtered，
+        # 合并了几段、拆了几问、延迟多少事后全查不到 —— 补上才能量化这次改动。
+        log_rec({'event': 'asr', 'text': txt, 'dur': round(dur, 2),
+                 'merged': gate.n_merged, 'split': n_split})
+        if n_split:
+            ask_group(qs)        # 组内串行：前一题答完再提交下一题（见 ask_group 注释）
+        else:
+            ask(txt)
 
 
 def capture_forever():
